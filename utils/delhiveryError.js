@@ -1,12 +1,24 @@
 function handleError(res, error) {
-  console.error(
-    error.response?.data || error.message
-  );
+  const upstreamStatus = error.response?.status || error.status || 500;
+  const upstreamData = error.response?.data;
+  const upstreamMessage =
+    (typeof upstreamData === "string" && upstreamData) ||
+    upstreamData?.detail ||
+    upstreamData?.message ||
+    upstreamData?.error ||
+    error.message ||
+    "Unknown Delhivery API error";
 
-  return res.status(error.response?.status || 500).json({
+  console.error("Delhivery API request failed:", {
+    status: upstreamStatus,
+    message: upstreamMessage,
+  });
+
+  return res.status(upstreamStatus).json({
     success: false,
     message: "Delhivery API request failed",
-    error: error.response?.data || error.message,
+    statusCode: upstreamStatus,
+    error: upstreamMessage,
   });
 }
 module.exports = handleError;

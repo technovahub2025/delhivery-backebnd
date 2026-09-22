@@ -3,7 +3,10 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
 
-dotenv.config();
+const dotenvResult = dotenv.config({ quiet: true });
+if (dotenvResult.error) {
+  console.error("Unable to load .env configuration:", dotenvResult.error.message);
+}
 
 const app = express();
 
@@ -40,4 +43,9 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.info("Delhivery configuration loaded:", {
+    baseUrl: process.env.DELHIVERY_BASE_URL || "not configured",
+    tokenConfigured: Boolean(process.env.DELHIVERY_API_TOKEN?.trim()),
+    tokenLength: process.env.DELHIVERY_API_TOKEN?.trim().length || 0,
+  });
 });

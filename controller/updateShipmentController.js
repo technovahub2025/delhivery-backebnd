@@ -1,19 +1,14 @@
-const axios = require("axios");
+const delhiveryApi = require("../services/delhiveryService");
 const handleError = require("../utils/delhiveryError");
 
 exports.updateShipment = async (req, res) => {
   try {
     const shipmentData = req.body;
 
-    const response = await axios.post(
-      `${process.env.DELHIVERY_BASE_URL}/api/p/edit`,
+    const response = await delhiveryApi.post(
+      "/api/p/edit",
       shipmentData,
-      {
-        headers: {
-          Authorization: `Token ${process.env.DELHIVERY_API_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      }
+      { headers: { "Content-Type": "application/json" } }
     );
 
     return res.status(200).json({
