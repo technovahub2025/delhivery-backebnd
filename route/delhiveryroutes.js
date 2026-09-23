@@ -34,4 +34,6 @@ router.post("/warehouses/update", updateWarehouse);
 router.get("/documents", downloadDocument);
 router.post("/webhook", delhiveryWebhook);
 
+router.use(require("./accountShipmentRoutes"));
+
 module.exports = router;
