@@ -35,6 +35,7 @@ async function fixture(t) {
   const carrier = { post: async (url) => {
     flags.calls++;
     if (flags.timeout) throw new Error("timeout");
+    if (flags.response) return { data: flags.response };
     if (flags.reject) return { data: { success: false, packages: [{ status: "Fail" }] } };
     return { data: url.includes("create") ? { success: true, packages: [{ waybill: "TEST-WAYBILL", status: "Success" }] } : { status: true } };
   } };
@@ -88,6 +89,32 @@ test("uncertain carrier response prevents duplicate submission", async t => {
   assert.equal((await f.create()).status, 502);
   assert.equal((await f.create()).status, 409);
   assert.equal(f.flags.calls, 1);
+});
+
+test("partial-save rejection retains the reservation and blocks duplicate carrier calls", async t => {
+  const f = await fixture(t);
+  f.flags.response = {
+    success: false,
+    rmk: "An internal Error has occurred, Please get in touch with client.support@delhivery.com",
+    packages: [{ waybill: "", status: "Fail", err_code: "ER0005", remarks: [
+      "Crashing while saving package due to exception suspicious order/consignee. Package might have been partially saved."
+    ] }],
+  };
+  const first = await f.create();
+  assert.equal(first.status, 502);
+  assert.equal(first.body.data.packages[0].err_code, "ER0005");
+  assert.equal(f.rows.length, 1);
+  assert.equal((await f.create()).status, 409);
+  assert.equal(f.flags.calls, 1);
+  assert.equal((await f.request("/shipments")).body.data.total, 0);
+});
+
+test("explicit rejection without partial-save warnings allows a corrected submission", async t => {
+  const f = await fixture(t); f.flags.reject = true;
+  assert.equal((await f.create()).status, 502);
+  f.flags.reject = false;
+  assert.equal((await f.create()).status, 201);
+  assert.equal(f.flags.calls, 2);
 });
 test("post-carrier save failure reports the real waybill and prevents duplicate submission", async t => {
   const f = await fixture(t); f.flags.saveFail = true;

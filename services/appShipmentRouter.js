@@ -70,8 +70,9 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
     const parcel = data?.packages?.[0];
     const waybill = parcel?.waybill || parcel?.wbn || parcel?.AWB;
     if (rejected(data) || rejected(parcel) || !waybill) {
+      const uncertain = /partially\s+saved|might\s+have\s+been|may\s+have\s+been|internal\s+error|crashing\s+while\s+saving/i.test(JSON.stringify(data));
       // Retain reservations for ambiguous responses; only explicit rejection is safe to retry.
-      if (!waybill && (data?.success === false || /^(fail|failed|error)$/i.test(parcel?.status || ""))) {
+      if (!uncertain && !waybill && (data?.success === false || /^(fail|failed|error)$/i.test(parcel?.status || ""))) {
         try { await Shipment.deleteOne({ _id: intent._id, state: "creating" }); } catch { /* retain reservation */ }
       }
       return res.status(502).json({ success: false, message: "Delhivery did not confirm an accepted shipment. Check the order before retrying.", data });
