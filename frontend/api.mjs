@@ -103,8 +103,8 @@ export function createApi({ baseURL = "http://localhost:3000/api", adapter } = {
     createPickupRequest: (body) => post("/delhivery/pickups", body),
     createWarehouse: (body) => post("/delhivery/warehouses", body),
     updateWarehouse: (body) => post("/delhivery/warehouses/update", body),
-    downloadDocument: (waybill, signal) =>
-      get("/delhivery/documents", { waybill }, signal),
+    downloadDocument: (waybill, signal, docType = "EPOD") =>
+      get("/delhivery/documents", { waybill, doc_type: docType }, signal),
   };
 }
 
