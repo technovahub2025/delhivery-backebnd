@@ -75,7 +75,15 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
       if (!uncertain && !waybill && (data?.success === false || /^(fail|failed|error)$/i.test(parcel?.status || ""))) {
         try { await Shipment.deleteOne({ _id: intent._id, state: "creating" }); } catch { /* retain reservation */ }
       }
-      return res.status(502).json({ success: false, message: "Delhivery did not confirm an accepted shipment. Check the order before retrying.", data });
+      const remarks = Array.isArray(parcel?.remarks) ? parcel.remarks.join(" ") : parcel?.remarks;
+      const insufficientBalance = /insufficient\s+balance/i.test(String(remarks || ""));
+      const message = insufficientBalance
+        ? "Delhivery reported insufficient balance in the prepaid carrier account. Recharge the Delhivery account or contact your account administrator. " +
+          (uncertain
+            ? "The package might have been partially saved. Check this order in Delhivery or contact support before retrying; do not submit it with a new reference."
+            : "Check the order in Delhivery before retrying.")
+        : "Delhivery did not confirm an accepted shipment. Check the order before retrying.";
+      return res.status(502).json({ success: false, message, data });
     }
     const record = normalize(input, req.body.pickup_location?.name, waybill, intent.createdAt);
     const receipt = { success: true, packages: [{ waybill: String(waybill), status: "Success" }] };
