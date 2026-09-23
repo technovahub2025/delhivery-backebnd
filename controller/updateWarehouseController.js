@@ -4,7 +4,7 @@ const handleError = require("../utils/delhiveryError");
 exports.updateWarehouse = async (req, res) => {
   try {
     const response = await delhiveryApi.post(
-      "/api/backend/clientwarehouse/update/",
+      "/api/backend/clientwarehouse/edit/",
       req.body
     );
 
