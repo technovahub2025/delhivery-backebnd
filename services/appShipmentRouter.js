@@ -6,6 +6,13 @@ function rejected(data) {
     Boolean(data.error && data.error !== "false") ||
     Boolean(data.errors && Object.keys(data.errors).length);
 }
+function rejectionReason(data, parcel) {
+  const messages = [parcel?.remarks, data?.rmk, data?.message, data?.error, data?.errors]
+    .flat()
+    .filter(value => typeof value === "string" && value.trim() && value !== "false")
+    .map(value => value.trim());
+  return [...new Set(messages)].join(" ");
+}
 function normalize(input, warehouse, waybill, createdAt) {
   return {
     id: String(waybill), reference: input.order, customer: input.name || "",
@@ -75,14 +82,18 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
       if (!uncertain && !waybill && (data?.success === false || /^(fail|failed|error)$/i.test(parcel?.status || ""))) {
         try { await Shipment.deleteOne({ _id: intent._id, state: "creating" }); } catch { /* retain reservation */ }
       }
-      const remarks = Array.isArray(parcel?.remarks) ? parcel.remarks.join(" ") : parcel?.remarks;
-      const insufficientBalance = /insufficient\s+balance/i.test(String(remarks || ""));
+      const reason = rejectionReason(data, parcel);
+      const insufficientBalance = /insufficient\s+balance/i.test(reason);
       const message = insufficientBalance
         ? "Delhivery reported insufficient balance in the prepaid carrier account. Recharge the Delhivery account or contact your account administrator. " +
           (uncertain
             ? "The package might have been partially saved. Check this order in Delhivery or contact support before retrying; do not submit it with a new reference."
             : "Check the order in Delhivery before retrying.")
-        : "Delhivery did not confirm an accepted shipment. Check the order before retrying.";
+        : "Delhivery did not confirm an accepted shipment. " +
+          (reason ? `Reason: ${reason} ` : "") +
+          (uncertain
+            ? "The package might have been partially saved. Check the order in Delhivery before retrying; do not submit it with a new reference."
+            : "Check the order before retrying.");
       return res.status(502).json({ success: false, message, data });
     }
     const record = normalize(input, req.body.pickup_location?.name, waybill, intent.createdAt);
