@@ -1,0 +1,286 @@
+﻿const Shipment = require("../model/appShipment");
+const carrier = require("../services/delhiveryService");
+
+function isRejected(value) {
+  return !value ||
+    value.success === false ||
+    value.status === false ||
+    /^(fail|failed|failure|error)$/i.test(String(value.status || "")) ||
+    Boolean(value.error && value.error !== "false") ||
+    Boolean(value.errors && Object.keys(value.errors).length);
+}
+
+function rejectionMessage(data) {
+  const parcel = data?.packages?.[0];
+  return [
+    parcel?.remarks,
+    data?.rmk,
+    data?.message,
+    data?.error,
+    data?.errors,
+  ].flat().filter(v => typeof v === "string" && v.trim() && v !== "false")
+    .map(v => v.trim()).join(" ");
+}
+
+exports.listReverseOrders = async (req, res) => {
+  try {
+    const rows = await Shipment.find({
+      owner: req.user.id,
+      state: "saved",
+      kind: "reverse",
+    }).sort({ createdAt: -1 }).limit(200).lean();
+
+    return res.json({
+      success: true,
+      data: { reverseOrders: rows.map(row => row.record), total: rows.length },
+    });
+  } catch {
+    return res.status(503).json({
+      success: false,
+      message: "Reverse orders could not be loaded. Check the database connection.",
+    });
+  }
+};
+
+exports.createReverseOrder = async (req, res) => {
+  const input = req.body || {};
+  const orderId = String(input.reverseOrderId || "").trim();
+  const referenceNumber = String(input.referenceNumber || "").trim();
+  const returnReason = String(input.returnReason || "").trim();
+  const customer = String(input.customerName || "").trim();
+  const phone = String(input.phone || "").replace(/\D/g, "");
+  const address = String(input.address || "").trim();
+  const pin = String(input.pincode || "").trim();
+  const city = String(input.city || "").trim();
+  const state = String(input.state || "").trim();
+  const warehouse = String(input.returnWarehouse || "").trim();
+  const mode = String(input.shippingMode || "");
+  const items = Array.isArray(input.items) ? input.items : [];
+  const weightKg = Number(input.weightKg);
+  const length = Number(input.length);
+  const width = Number(input.width);
+  const height = Number(input.height);
+  const value = Number(input.orderValue || 0);
+  const clientName = String(input.clientName || process.env.DELHIVERY_CLIENT_NAME || "").trim();
+  const sellerGstTin = String(process.env.DELHIVERY_SELLER_GST_TIN || "").trim();
+  const returnName = String(input.returnName || process.env.DELHIVERY_RETURN_NAME || "").trim();
+  const returnAddress = String(input.returnAddress || process.env.DELHIVERY_RETURN_ADDRESS || "").trim();
+  const returnCity = String(input.returnCity || process.env.DELHIVERY_RETURN_CITY || "").trim();
+  const returnState = String(input.returnState || process.env.DELHIVERY_RETURN_STATE || "").trim();
+  const returnPin = String(input.returnPincode || process.env.DELHIVERY_RETURN_PIN || "").trim();
+  const returnPhone = String(input.returnPhone || process.env.DELHIVERY_RETURN_PHONE || "").replace(/\D/g, "");
+
+  if (!orderId || orderId.length > 80) {
+    return res.status(400).json({ success: false, message: "Enter a reverse-order ID of at most 80 characters." });
+  }
+  if (!referenceNumber || !returnReason || !customer || !address ||
+      !city || !state || !warehouse || !/^[1-9]\d{5}$/.test(pin) ||
+      !/^\d{10}$/.test(phone)) {
+    return res.status(400).json({
+      success: false,
+      message: "Complete the order reference, return reason, customer, address, city, state, valid pincode, phone and registered return warehouse.",
+    });
+  }
+  if (!items.length || items.some(item =>
+      !String(item?.name || "").trim() ||
+      !Number.isInteger(Number(item?.quantity)) ||
+      Number(item.quantity) < 1)) {
+    return res.status(400).json({ success: false, message: "Add at least one item with a positive whole-number quantity." });
+  }
+  if (!Number.isFinite(weightKg) || weightKg <= 0 ||
+      !Number.isFinite(length) || length <= 0 ||
+      !Number.isFinite(width) || width <= 0 ||
+      !Number.isFinite(height) || height <= 0 ||
+      !Number.isFinite(value) || value < 0 ||
+      !["Surface", "Express"].includes(mode)) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter positive package weight and dimensions, a valid order value, and Surface or Express mode.",
+    });
+  }
+
+  if (
+    !clientName || !returnName || !returnAddress || !returnCity ||
+    !returnState || !/^[1-9]\d{5}$/.test(returnPin) ||
+    !/^\d{10}$/.test(returnPhone)
+  ) {
+    return res.status(503).json({
+      success: false,
+      message: "Enter the registered Delhivery client name and complete seller return-address details. No carrier request was sent.",
+    });
+  }
+
+  const internalReference = `__reverse__:${orderId}`;
+  let intent;
+
+  try {
+    await Shipment.init();
+    const previous = await Shipment.findOne({
+      owner: req.user.id,
+      reference: internalReference,
+    });
+    if (previous?.state === "saved") {
+      return res.json({ success: true, reverseOrder: previous.record, reused: true });
+    }
+    if (previous) {
+      return res.status(409).json({
+        success: false,
+        message: "This order has a pending or uncertain result. Check Delhivery before retrying.",
+      });
+    }
+    intent = await Shipment.create({
+      owner: req.user.id,
+      reference: internalReference,
+      state: "creating",
+      kind: "reverse",
+      record: { kind: "reverse", reverseOrderId: orderId },
+    });
+  } catch (error) {
+    return res.status(error.code === 11000 ? 409 : 503).json({
+      success: false,
+      message: "The reverse order could not be reserved. No carrier request was sent.",
+    });
+  }
+
+  const totalQuantity = items.reduce((sum, item) => sum + Number(item.quantity), 0);
+  const description = items.map(item =>
+    `${String(item.name).trim()}${item.sku ? ` (SKU ${String(item.sku).trim()})` : ""} x ${Number(item.quantity)}`
+  ).join(", ");
+
+  // Delhivery's order-creation API uses payment_mode Pickup for reverse flow.
+  const payload = {
+    shipments: [{
+      client: clientName,
+      return_name: returnName,
+      return_country: "India",
+      return_state: returnState,
+      return_add: returnAddress,
+      return_city: returnCity,
+      return_pin: returnPin,
+      return_phone: returnPhone,
+      name: customer,
+      add: address,
+      pin,
+      city,
+      state,
+      country: "India",
+      phone,
+      email: String(input.email || "").trim(),
+      order: orderId,
+      ...(sellerGstTin ? { seller_gst_tin: sellerGstTin } : {}),
+      payment_mode: "Pickup",
+      total_amount: String(value),
+      cod_amount: "0",
+      products_desc: description,
+      quantity: String(totalQuantity),
+      weight: String(Math.round(weightKg * 1000)),
+      shipment_length: String(length),
+      shipment_width: String(width),
+      shipment_height: String(height),
+      shipping_mode: mode,
+    }],
+    pickup_location: { name: warehouse },
+    fragile_shipment: Boolean(input.fragile),
+  };
+
+  let providerData;
+  try {
+    const response = await carrier.post(
+      "/api/cmu/create.json",
+      `format=json&data=${encodeURIComponent(JSON.stringify(payload))}`,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+    providerData = response.data;
+  } catch {
+    return res.status(502).json({
+      success: false,
+      message: "Delhivery did not confirm creation. Check this order in Delhivery before retrying.",
+    });
+  }
+
+  const parcel = providerData?.packages?.[0];
+  const waybill = parcel?.waybill || parcel?.wbn || parcel?.AWB;
+
+  if (isRejected(providerData) || isRejected(parcel) || !waybill) {
+    const reason = rejectionMessage(providerData);
+    if (!waybill && (providerData?.success === false ||
+        /^(fail|failed|error)$/i.test(String(parcel?.status || "")))) {
+      try { await Shipment.deleteOne({ _id: intent._id, state: "creating" }); } catch {}
+    }
+    return res.status(502).json({
+      success: false,
+      message: `Delhivery did not confirm the reverse order. ${reason} Check the order before retrying.`,
+      data: providerData,
+    });
+  }
+
+  const record = {
+    id: String(waybill),
+    waybill: String(waybill),
+    kind: "reverse",
+    reverseOrderId: orderId,
+    reference: referenceNumber,
+    referenceNumber,
+    returnReason,
+    notes: String(input.notes || "").trim(),
+    items,
+    description,
+    quantity: totalQuantity,
+    customer,
+    address,
+    destination: city,
+    state,
+    pincode: pin,
+    phone,
+    email: String(input.email || "").trim(),
+    warehouse,
+    returnWarehouse: warehouse,
+    payment: "Pickup",
+    value,
+    weight: weightKg,
+    dimensions: `${length} x ${width} x ${height} cm`,
+    length,
+    width,
+    height,
+    mode,
+    fragile: Boolean(input.fragile),
+    date: new Date().toISOString().slice(0, 10),
+    status: "Ready for Pickup",
+    history: [],
+  };
+
+  try {
+    const saveResult = await Shipment.updateOne(
+      { _id: intent._id, owner: req.user.id, state: "creating", kind: "reverse" },
+      {
+        $set: {
+          state: "saved",
+          kind: "reverse",
+          waybill: String(waybill),
+          record,
+          receipt: { success: true, packages: [{ waybill: String(waybill), status: "Success" }] },
+        },
+      }
+    );
+
+    if (saveResult.matchedCount !== 1) {
+      return res.status(503).json({
+        success: false,
+        waybill: String(waybill),
+        message: `AWB ${waybill} was created, but its database record was not confirmed saved. Do not submit it again; check Delhivery and the database.`,
+      });
+    }
+  } catch {
+    return res.status(503).json({
+      success: false,
+      waybill: String(waybill),
+      message: `AWB ${waybill} was created but could not be saved. Do not submit it again; check Delhivery and the database.`,
+    });
+  }
+
+  return res.status(201).json({ success: true, reverseOrder: record });
+};
+
+
+
+

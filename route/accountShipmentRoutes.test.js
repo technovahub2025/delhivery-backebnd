@@ -109,12 +109,76 @@ test("partial-save rejection retains the reservation and blocks duplicate carrie
   assert.equal((await f.request("/shipments")).body.data.total, 0);
 });
 
+test("insufficient prepaid balance is explained while partial-save protection is retained", async t => {
+  const f = await fixture(t);
+  f.flags.response = {
+    success: false,
+    upload_wbn: "UPL8766056862935565231",
+    rmk: "An internal Error has occurred, Please get in touch with client.support@delhivery.com",
+    packages: [{ waybill: "", status: "Fail", remarks: [
+      "Crashing while saving package due to exception 'Prepaid client manifest charge API failed due to insufficient balance'. Package might have been partially saved."
+    ] }],
+  };
+  const response = await f.create();
+  assert.equal(response.status, 502);
+  assert.equal(response.body.success, false);
+  assert.match(response.body.message, /insufficient balance/);
+  assert.match(response.body.message, /partially saved/);
+  assert.deepEqual(response.body.data, f.flags.response);
+  assert.equal((await f.create()).status, 409);
+  assert.equal(f.flags.calls, 1);
+  assert.equal((await f.request("/shipments")).body.data.total, 0);
+});
+
 test("explicit rejection without partial-save warnings allows a corrected submission", async t => {
   const f = await fixture(t); f.flags.reject = true;
   assert.equal((await f.create()).status, 502);
   f.flags.reject = false;
   assert.equal((await f.create()).status, 201);
   assert.equal(f.flags.calls, 2);
+});
+
+test("carrier remarks are included in the failure message and raw response is preserved", async t => {
+  const f = await fixture(t);
+  f.flags.response = {
+    success: false,
+    packages: [{ status: "Fail", remarks: ["Pickup location does not exist.", "Verify warehouse name."] }],
+  };
+  const response = await f.create();
+  assert.equal(response.status, 502);
+  assert.match(response.body.message, /Pickup location does not exist\. Verify warehouse name\./);
+  assert.deepEqual(response.body.data, f.flags.response);
+  assert.equal((await f.request("/shipments")).body.data.total, 0);
+});
+
+test("top-level carrier rejection reason is shown when package remarks are missing", async t => {
+  const f = await fixture(t);
+  f.flags.response = { success: false, rmk: "Invalid payment mode for this account.", packages: [] };
+  const response = await f.create();
+  assert.equal(response.status, 502);
+  assert.match(response.body.message, /Invalid payment mode for this account\./);
+});
+
+test("non-serviceable pincode with a partial-save warning is explained and cannot be resubmitted", async t => {
+  const f = await fixture(t);
+  f.flags.response = {
+    success: false,
+    package_count: 1,
+    upload_wbn: "UPL17552450625836827658",
+    packages: [{
+      waybill: "", refnum: "876543", payment: "Pre-paid", status: "Fail", serviceable: false,
+      remarks: ["Crashing while saving package due to exception '605017 is non serviceable pincode'. Package might have been partially saved."],
+    }],
+    rmk: "An internal Error has occurred, Please get in touch with client.support@delhivery.com",
+  };
+  const response = await f.create();
+  assert.equal(response.status, 502);
+  assert.match(response.body.message, /605017 is non serviceable pincode/);
+  assert.match(response.body.message, /do not submit it with a new reference/);
+  assert.deepEqual(response.body.data, f.flags.response);
+  assert.equal((await f.create()).status, 409);
+  assert.equal(f.flags.calls, 1);
+  assert.equal((await f.request("/shipments")).body.data.total, 0);
 });
 test("post-carrier save failure reports the real waybill and prevents duplicate submission", async t => {
   const f = await fixture(t); f.flags.saveFail = true;

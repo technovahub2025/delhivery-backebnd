@@ -39,6 +39,12 @@ Most Delhivery methods return `{ success, data }`; login returns
 Keep provider-specific checks when interpreting `data`: failure formats may
 vary. Labels and documents return JSON, not a downloadable file blob.
 
+Use `api.downloadDocument(waybill, signal, docType)` for shipping documents.
+`docType` defaults to `EPOD`; other supported values are `SIGNATURE_URL`,
+`RVP_QC_IMAGE`, and `SELLER_RETURN_IMAGE`. The backend accepts
+`GET /api/delhivery/documents?waybill=1234567890&doc_type=EPOD` and forwards
+the request to Delhivery's `/api/rest/fetch/pkg/document/` endpoint.
+
 The API module covers the 17 browser-facing backend routes. `/webhook` is a
 callback receiver for Delhivery and should not be called to populate a screen.
 There are currently no read endpoints for shipment lists, dashboard metrics,

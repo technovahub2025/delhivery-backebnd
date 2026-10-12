@@ -1,4 +1,4 @@
-const router = require("express").Router();
+﻿const router = require("express").Router();
 
 const { checkPincode } = require("../controller/checkPincodeController");
 const { checkHeavyPincode } = require("../controller/checkHeavyPincodeController");
@@ -12,6 +12,16 @@ const { createWarehouse } = require("../controller/createWarehouseController");
 const { updateWarehouse } = require("../controller/updateWarehouseController");
 const { downloadDocument } = require("../controller/downloadDocumentController");
 const { delhiveryWebhook } = require("../controller/delhiveryWebhookController");
+const createDashboardController = require("../controller/dashboardController");
+const reverseOrderController = require("../controller/reverseOrderController");
+
+const Shipment = require("../model/appShipment");
+const carrier = require("../services/delhiveryService");
+
+const dashboardController = createDashboardController({
+  Shipment,
+  carrier,
+});
 
 router.get("/pincode", checkPincode);
 router.get("/pincode/heavy", checkHeavyPincode);
@@ -26,6 +36,21 @@ router.post("/warehouses/update", updateWarehouse);
 router.get("/documents", downloadDocument);
 router.post("/webhook", delhiveryWebhook);
 
+router.get(
+  "/dashboard/action-required",
+  ...dashboardController.getActionRequired
+);
+
+router.get("/reverse-orders", require("../utils/requireSession"), reverseOrderController.listReverseOrders);
+router.post("/reverse-orders", require("../utils/requireSession"), reverseOrderController.createReverseOrder);
 router.use(require("./accountShipmentRoutes"));
 
+const ndrController = require("../controller/ndrController");
+
+router.post("/ndr/update", require("../utils/requireSession"), ndrController.updateNdr);
+router.get("/ndr/status/:uplId", require("../utils/requireSession"), ndrController.getNdrStatus);
+
 module.exports = router;
+
+
+

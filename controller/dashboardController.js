@@ -1,0 +1,96 @@
+﻿const requireSession = require("../utils/requireSession");
+
+module.exports = function createDashboardController({ Shipment, carrier }) {
+  return {
+    getActionRequired: [
+      requireSession,
+      async (req, res) => {
+        try {
+          const shipments = await Shipment.find({
+            owner: req.user.id,
+            state: "saved",
+            $or: [
+              { kind: "forward" },
+              { kind: { $exists: false } },
+            ],
+          })
+            .select("waybill")
+            .lean();
+
+          let badAddresses = 0;
+
+          for (const shipment of shipments) {
+            if (!shipment.waybill) continue;
+
+            try {
+              const response = await carrier.get(
+                "/api/v1/packages/json/",
+                {
+                  params: {
+                    waybill: String(shipment.waybill),
+                  },
+                }
+              );
+
+              const shipmentData =
+                response.data?.ShipmentData || [];
+
+              for (const entry of shipmentData) {
+                const liveShipment = entry?.Shipment;
+                if (!liveShipment) continue;
+
+                const statusInstruction =
+                  liveShipment.Status?.Instructions || "";
+
+                const hasBadAddressStatus =
+                  /bad\/incomplete address/i.test(
+                    statusInstruction
+                  );
+
+                const hasBadAddressScan = (
+                  liveShipment.Scans || []
+                ).some((scan) =>
+                  /bad\/incomplete address/i.test(
+                    scan?.ScanDetail?.Instructions || ""
+                  )
+                );
+
+                if (hasBadAddressStatus || hasBadAddressScan) {
+                  badAddresses += 1;
+                  break;
+                }
+              }
+            } catch (error) {
+              console.warn(
+                `Unable to fetch live tracking for waybill ${shipment.waybill}:`,
+                error.message
+              );
+            }
+          }
+
+          return res.json({
+            success: true,
+            data: {
+              highRiskOrders: 0,
+              badAddresses,
+              pending: 0,
+              toBeShipped: 0,
+              exceptionsNdr: 0,
+            },
+          });
+        } catch (error) {
+          console.error(
+            "Action Required summary failed:",
+            error.message
+          );
+
+          return res.status(503).json({
+            success: false,
+            message:
+              "Action Required information could not be loaded. Please try again.",
+          });
+        }
+      },
+    ],
+  };
+};
