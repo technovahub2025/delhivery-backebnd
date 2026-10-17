@@ -18,9 +18,14 @@ module.exports = function createDashboardController({ Shipment, carrier }) {
             .lean();
 
           let badAddresses = 0;
+          let trackingChecked = 0;
+          let trackingFailed = 0;
 
           for (const shipment of shipments) {
-            if (!shipment.waybill) continue;
+            if (!shipment.waybill) {
+              trackingFailed += 1;
+              continue;
+            }
 
             try {
               const response = await carrier.get(
@@ -32,20 +37,24 @@ module.exports = function createDashboardController({ Shipment, carrier }) {
                 }
               );
 
-              const shipmentData =
-                response.data?.ShipmentData || [];
+              const shipmentData = response.data?.ShipmentData;
 
-              for (const entry of shipmentData) {
+              if (!Array.isArray(shipmentData) || shipmentData.length === 0) {
+                trackingFailed += 1;
+                continue;
+              }
+
+              trackingChecked += 1;
+
+              const hasBadAddress = shipmentData.some((entry) => {
                 const liveShipment = entry?.Shipment;
-                if (!liveShipment) continue;
+                if (!liveShipment) return false;
 
                 const statusInstruction =
                   liveShipment.Status?.Instructions || "";
 
                 const hasBadAddressStatus =
-                  /bad\/incomplete address/i.test(
-                    statusInstruction
-                  );
+                  /bad\/incomplete address/i.test(statusInstruction);
 
                 const hasBadAddressScan = (
                   liveShipment.Scans || []
@@ -55,12 +64,12 @@ module.exports = function createDashboardController({ Shipment, carrier }) {
                   )
                 );
 
-                if (hasBadAddressStatus || hasBadAddressScan) {
-                  badAddresses += 1;
-                  break;
-                }
-              }
+                return hasBadAddressStatus || hasBadAddressScan;
+              });
+
+              if (hasBadAddress) badAddresses += 1;
             } catch (error) {
+              trackingFailed += 1;
               console.warn(
                 `Unable to fetch live tracking for waybill ${shipment.waybill}:`,
                 error.message
@@ -68,14 +77,22 @@ module.exports = function createDashboardController({ Shipment, carrier }) {
             }
           }
 
+          const badAddressesAvailable = trackingFailed === 0;
+
           return res.json({
             success: true,
             data: {
-              highRiskOrders: 0,
-              badAddresses,
-              pending: 0,
-              toBeShipped: 0,
-              exceptionsNdr: 0,
+              badAddresses: badAddressesAvailable ? badAddresses : null,
+              badAddressesAvailable,
+              trackingChecked,
+              trackingFailed,
+              message: badAddressesAvailable
+                ? "Bad-address tracking check completed."
+                : "Bad-address count is incomplete because some tracking requests failed.",
+              highRiskOrders: null,
+              pending: null,
+              toBeShipped: null,
+              exceptionsNdr: null,
             },
           });
         } catch (error) {
@@ -94,3 +111,4 @@ module.exports = function createDashboardController({ Shipment, carrier }) {
     ],
   };
 };
+

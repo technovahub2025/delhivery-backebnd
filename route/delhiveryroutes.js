@@ -7,7 +7,7 @@ const { fetchWaybill } = require("../controller/fetchWaybillController");
 const { trackShipment } = require("../controller/trackShipmentController");
 const { calculateShippingCost } = require("../controller/calculateShippingCostController");
 const { generateShippingLabel } = require("../controller/generateShippingLabelController");
-const { createPickupRequest } = require("../controller/createPickupRequestController");
+const { createPickupRequest, listPickupRequests } = require("../controller/createPickupRequestController");
 const { createWarehouse } = require("../controller/createWarehouseController");
 const { updateWarehouse } = require("../controller/updateWarehouseController");
 const { downloadDocument } = require("../controller/downloadDocumentController");
@@ -30,7 +30,8 @@ router.get("/waybills", fetchWaybill);
 router.get("/shipments/track", trackShipment);
 router.get("/shipping-cost", calculateShippingCost);
 router.get("/shipping-label", generateShippingLabel);
-router.post("/pickups", createPickupRequest);
+router.get("/pickups", require("../utils/requireSession"), listPickupRequests);
+router.post("/pickups", require("../utils/requireSession"), createPickupRequest);
 router.post("/warehouses", createWarehouse);
 router.post("/warehouses/update", updateWarehouse);
 router.get("/documents", downloadDocument);
@@ -47,10 +48,13 @@ router.use(require("./accountShipmentRoutes"));
 
 const ndrController = require("../controller/ndrController");
 
+router.get("/ndr/cases", require("../utils/requireSession"), ndrController.listNdrCases);
 router.post("/ndr/update", require("../utils/requireSession"), ndrController.updateNdr);
 router.get("/ndr/status/:uplId", require("../utils/requireSession"), ndrController.getNdrStatus);
 
 module.exports = router;
+
+
 
 
 

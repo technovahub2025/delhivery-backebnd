@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -29,6 +29,9 @@ app.use("/api/auth", authRoutes);
 const delhiveryRoutes = require("./route/delhiveryroutes");
 app.use("/api/delhivery", delhiveryRoutes);
 
+const reportRoutes = require("./route/reportRoutes");
+app.use("/api/reports", reportRoutes);
+
 // MongoDB Connection
 mongoose
   .connect(process.env.MONGO_URI)
@@ -49,4 +52,5 @@ app.listen(PORT, () => {
     tokenLength: process.env.DELHIVERY_API_TOKEN?.trim().length || 0,
   });
 });
+
 
