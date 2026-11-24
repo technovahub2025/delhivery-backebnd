@@ -84,7 +84,6 @@ router.get("/", async (req, res) => {
 
     return res.json({ success: true, data: { reports: reports.map(reportData) } });
   } catch (error) {
-    console.error("Reports list failed:", error.message);
     return res.status(503).json({ success: false, message: "Reports could not be loaded." });
   }
 });
@@ -109,7 +108,6 @@ router.post("/", async (req, res) => {
 
     return res.status(201).json({ success: true, data: { report: reportData(report) } });
   } catch (error) {
-    console.error("Report create failed:", error.message);
     return res.status(503).json({ success: false, message: "The report could not be saved." });
   }
 });
@@ -144,7 +142,6 @@ router.patch("/:id", async (req, res) => {
 
     return res.json({ success: true, data: { report: reportData(report) } });
   } catch (error) {
-    console.error("Report update failed:", error.message);
     return res.status(503).json({ success: false, message: "The report could not be updated." });
   }
 });
@@ -166,7 +163,6 @@ router.delete("/:id", async (req, res) => {
 
     return res.json({ success: true, message: "Report deleted." });
   } catch (error) {
-    console.error("Report delete failed:", error.message);
     return res.status(503).json({ success: false, message: "The report could not be deleted." });
   }
 });

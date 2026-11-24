@@ -13,3 +13,21 @@ module.exports = function requireSession(req, res, next) {
   }
   next();
 };
+
+module.exports.requireActiveAccount = function requireActiveAccount(User) {
+  return (req, res, next) => {
+    if (req.method === "POST" && /^\/delhivery\/webhook\/?$/i.test(req.path)) return next();
+    return module.exports(req, res, async () => {
+      const id = req.user.id;
+      if (!/^[\da-f]{24}$/i.test(id)) return res.status(401).json({ success: false, message: "Session expired or invalid. Please log in again." });
+      let user;
+      try {
+        user = await User.findById(id).select("active").lean();
+      } catch {
+        return res.status(503).json({ success: false, message: "Account status could not be verified." });
+      }
+      if (!user || user.active === false) return res.status(401).json({ success: false, message: "Session expired or invalid. Please log in again." });
+      return next();
+    });
+  };
+};

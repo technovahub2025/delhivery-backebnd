@@ -1,0 +1,124 @@
+# Phase 1 technical implementation plan
+
+**Scope:** SRD v1.0 Sections 3–9 and Appendix A. The SRD is treated as the requirements source; this is a plan only. No code, package, database, environment, carrier, or Git changes were made.
+
+## 1. Requirement traceability to current code
+
+| SRD requirement | Existing implementation and reuse | Gap and planned coverage |
+|---|---|---|
+| **3.1 Destination:** mandatory pincode, city/state/zone, serviceability, populate available destination data from courier APIs. | [RecipientDetailsStep.jsx](D:/delhivery/src/components/shipments/steps/RecipientDetailsStep.jsx:5) checks pincode and fills city/state; [checkPincodeController.js](D:/delhivery-backebnd/controller/checkPincodeController.js:4) calls Delhivery and returns a serviceability result. | **Partial.** No delivery zone lookup or normalized multi-courier serviceability. Add zone resolution and per-carrier serviceability to the quote workflow. |
+| **3.2 Shipper/consignor:** company/contact, phone/email, address, city/state/pincode, GST; save/reuse profiles. | Existing recipient form and warehouse form provide some reusable field patterns. [PickupWarehouseStep.jsx](D:/delhivery/src/components/shipments/steps/PickupWarehouseStep.jsx:7) selects a warehouse. | **Missing as a shipper profile.** A carrier-registered warehouse is not a saved shipper/consignor profile. Add saved shipper profiles and auto-population. |
+| **3.3 Consignee:** recipient/company/contact/address/GST; retain for reuse. | Recipient fields and pincode lookup exist in [RecipientDetailsStep.jsx](D:/delhivery/src/components/shipments/steps/RecipientDetailsStep.jsx:124). | **Partial.** Data is entered per shipment; no saved consignee/contact master exists. Add searchable saved consignees and create/update from booking. |
+| **3.4 Pickup location:** same-as-shipper or a new pickup contact/address. | Existing flow selects a registered pickup warehouse in [PickupWarehouseStep.jsx](D:/delhivery/src/components/shipments/steps/PickupWarehouseStep.jsx:7). | **Partial.** There is no same-as-shipper copy behavior or separate pickup address/contact in shipment booking. Add both choices; retain the warehouse selection path for Delhivery. |
+| **3.5 Product/package:** description/category, box count, actual weight, dimensions, special handling, multiple package dimensions, volumetric/chargeable weight by carrier rules. | [PackageDetailsStep.jsx](D:/delhivery/src/components/shipments/steps/PackageDetailsStep.jsx:61) supports multiple boxes and computes actual, volumetric, and chargeable weight. It uses a fixed divisor of 5000. The UI also has a fragile checkbox at lines 421–428. | **Partial.** The calculation is not carrier-specific; the current payload does not map the fragile flag, and booking normalization does not retain complete per-box detail. Add normalized package data, product category/handling mapping, and per-carrier dimensional/rounding rules. |
+| **3.6 Payment/shipping mode:** prepaid or COD, COD collection amount, Surface or Express. | [PaymentStep.jsx](D:/delhivery/src/components/shipments/steps/PaymentStep.jsx:1) offers prepaid/COD and Surface/Express. [api.js](D:/delhivery/src/services/api.js:141) sends a COD amount based on order value. | **Partial.** There is one amount field, not a separately defined COD collection amount. Confirm whether it must equal order value or can differ; record payment and shipping choices in the immutable booking snapshot. |
+| **4 Customer Management:** credit and walk-in customers; company/contact, GST/billing/shipping addresses, credit terms/limit, rate card, billing configuration/outstanding balance; walk-in pricing, payment and shipment transactions. | No customer master or customer-management page/model was found. The existing [User model](D:/delhivery-backebnd/model/model.js:3) is application login identity, not a customer account. | **Missing.** Add customer records and management UI. Do not conflate application users, courier warehouses, shippers, consignees, and the SRD’s customer category. |
+| **5 Customer Rate Master:** customer-specific and standard walk-in pricing; zone/weight slabs, modes, extra-weight charges, fuel/COD/other charges; calculate selling price and save the applied card/charges. | Existing [shipping-cost controller](D:/delhivery-backebnd/controller/calculateShippingCostController.js:4) retrieves Delhivery’s carrier charge. [CreateShipmentPage.jsx](D:/delhivery/src/pages/shipments/CreateShipmentPage.jsx:37) compares Delhivery Surface/Express. | **Missing.** Carrier cost is not the customer selling rate. Add persisted rate cards, a tariff calculation service, and a shipment-time rate-card/charge snapshot. |
+| **6 Multi-courier integration:** modular support for several carriers without redesigning the application. | Existing shared [Delhivery service](D:/delhivery-backebnd/services/delhiveryService.js:1) and provider-specific controllers are reusable as the first adapter. | **Missing.** Carrier calls are hard-coded to Delhivery routes/paths. Add a provider adapter contract and partner registry; only implement additional adapters when their API docs and credentials are supplied. |
+| **7 Rate comparison:** request rates from configured carriers; show partner, Surface/Express rate, ETA, serviceability, charges, total partner cost; operator manually selects; save every quote; use selected partner for booking/AWB. | Existing booking summary and [ShippingCostCalculator.jsx](D:/delhivery/src/components/shipping/ShippingCostCalculator.jsx:54) request Delhivery Surface/Express prices (and estimates). | **Partial.** It compares modes within one carrier, not carriers. It does not persist quote responses or use historical delivery performance. Build a unified comparison view, persist quotes, and require explicit manual selection. Do not add automatic selection: the SRD says manual selection initially. |
+| **8 Rate comparison/profitability:** preserve per-shipment partner quote, final partner cost, customer selling rate, applicable charges/GST, calculate profit and margin, preserve historic pricing when rates change. | Existing [AppShipment model](D:/delhivery-backebnd/model/appShipment.js:2) stores booking data in a `Mixed` record, but current normalization in [appShipmentRouter.js](D:/delhivery-backebnd/services/appShipmentRouter.js:28) does not store the required pricing records. | **Missing.** Store separate, immutable quote, partner cost, selling-rate, charge, and GST snapshots; calculate gross profit and margin using the SRD formulas. Final partner invoice cost requires an agreed source/timing. |
+| **9 AWB and drafts:** Option A saves, books with selected carrier, stores AWB/partner reference and label. Option B saves editable draft without AWB; pending-AWB list and later generation. Keep Draft/Booking Pending/Booked/AWB Generated states and prevent duplicate booking/AWB. | Existing [shipment router](D:/delhivery-backebnd/services/appShipmentRouter.js:143) reserves unique owner/reference before carrier creation, validates returned AWB and saves the result. [ShipmentsPage.jsx](D:/delhivery/src/pages/shipments/ShipmentsPage.jsx:25) has a Pending AWB filter. | **Partial.** Current path immediately creates a Delhivery booking; no save/resume draft. Backend only has `creating`/`saved` states. The Pending AWB filter has no corresponding draft persistence flow. Add explicit draft state and transition workflow while preserving existing duplicate protection. |
+| **Appendix A booking screen:** Destination → Shipper → Consignee → Pickup → Product/Package → Payment/Shipping; one scrollable booking workflow with save/AWB actions. | Current [CreateShipmentPage.jsx](D:/delhivery/src/pages/shipments/CreateShipmentPage.jsx:272) is a multisection form with package, payment, and review components. | **Partial.** Current sequence groups pickup before recipient and has no shipper/consignee profile sections, customer/rate comparison, or Save as Draft action. Reorder and extend the form to match the appendix sequence, keeping both save actions visible in the review/action area. |
+
+## 2. Data model plan
+
+Add the following Mongoose models:
+
+1. **Customer** — account owner, credit/walk-in category, company/contact details, GST and billing address, shipping addresses, credit terms/limit, assigned rate card, monthly billing configuration, and outstanding balance as required by Section 4.
+2. **SavedPartyAddress** *(or embedded subdocuments on Customer, pending client volume/reuse decision)* — shipper/consignor, consignee, and pickup contacts with address, phone/email, GST where applicable, and customer association where relevant.
+3. **CustomerRateCard** — walk-in standard card or customer-specific card; zone and weight slabs, Surface/Express prices, additional-weight charges, fuel/COD/other charges, GST treatment, and active/effective dates.
+4. **CourierPartner** — enabled partner, adapter identifier, capabilities, and non-secret configuration references. Keep API secrets out of regular customer/shipment records.
+5. **CourierRateQuote** — shipment/draft reference, partner and service, serviceability, ETA where available, normalized charges, total carrier quote, response reference, quote timestamp/expiry, and provider response metadata needed for support/reporting.
+
+Modify **AppShipment** additively:
+
+- Add an explicit pricing/selection snapshot (or typed optional subdocument) for chosen partner, selected quote, customer category/rate card version, selling charges/GST, and profit calculation inputs.
+- Support an explicit `draft` lifecycle state while retaining current `creating` and `saved` meanings. Do not change the current default state for legacy creation.
+- Preserve the existing unique `(owner, reference)` index and owner scoping. Existing `record` is `Mixed`; old records must remain readable without backfill and serializers must handle absent new fields.
+- Keep reverse shipments (`kind: "reverse"`) out of new forward-draft lists and avoid changing historical records.
+
+The new rate and quote snapshots must be **immutable for completed historical bookings**. Updating a customer’s current rate card must not recalculate older shipments.
+
+## 3. Frontend screens and components
+
+- **Customer Management:** customer list/detail and create/edit form for credit/walk-in categories, company/contact, GST/billing/shipping addresses, credit settings, and saved shipper/consignee profiles.
+- **Rate Master:** rate-card list and editor for customer or walk-in scope, zones, weight slabs, mode, surcharges, and GST settings.
+- **Booking workflow:** extend the existing `CreateShipmentPage` and step components to match Appendix A sequence. Add customer selection/category, saved shipper/consignee pickers, same-as-shipper/new pickup selection, package category/handling, and partner-specific weight preview.
+- **Rate comparison:** embed a comparison step/panel showing partner, modes, rate, ETA, serviceability, charge breakdown, total carrier cost, customer selling price, and estimated profit/margin. Operator selects a carrier/service explicitly.
+- **Drafts/Pending AWB:** list and resume saved drafts, edit them, refresh expired quotes, and initiate AWB generation later.
+- **Shipment details:** show selected carrier, AWB/reference, immutable pricing snapshot, and per-shipment profitability. Avoid building Phase 4 analytics or Phase 3 invoice/payment workflows as part of this Phase 1 plan.
+
+Likely frontend files include [navigation.js](D:/delhivery/src/config/navigation.js), [WorkspacePages.jsx](D:/delhivery/src/routes/WorkspacePages.jsx), [api.js](D:/delhivery/src/services/api.js), [CreateShipmentPage.jsx](D:/delhivery/src/pages/shipments/CreateShipmentPage.jsx), the existing [shipment steps](D:/delhivery/src/components/shipments/steps/), [ShipmentsPage.jsx](D:/delhivery/src/pages/shipments/ShipmentsPage.jsx), and [ShipmentDetailsDrawer.jsx](D:/delhivery/src/components/shipments/ShipmentDetailsDrawer.jsx).
+
+## 4. Backend routes and services
+
+Keep the active authenticated shipment path in [appShipmentRouter.js](D:/delhivery-backebnd/services/appShipmentRouter.js) as the foundation. The standalone [createShipmentController.js](D:/delhivery-backebnd/controller/createShipmentController.js) exists but is not the route used by the current app shipment flow.
+
+Suggested route groups:
+
+- `GET/POST /api/customers`, `GET/PATCH /api/customers/:id`, plus saved-party CRUD scoped to the authenticated owner.
+- `GET/POST /api/rate-cards`, `GET/PATCH/DELETE /api/rate-cards/:id`, and an internal rate-resolution/calculation service.
+- `GET /api/courier-partners` for enabled partners; management/configuration mechanism depends on the client’s operating model.
+- `POST /api/shipping/quotes` to resolve customer selling price and request configured partner rates; persist each result, including partial failures.
+- `POST /api/shipments/drafts`, `GET /api/shipments/drafts`, `GET/PATCH /api/shipments/drafts/:id`, and `POST /api/shipments/:id/book` for the AWB transition.
+
+Use a provider contract for serviceability, quote, create-booking/AWB, and label retrieval. Adapt the current Delhivery controller paths through the first Delhivery adapter; avoid making the React UI provider-specific. Keep the legacy `/api/delhivery/...` paths and response shapes available during migration so existing Delhivery features and shipment history continue to work.
+
+## 5. Quote, pricing, draft, and AWB workflows
+
+1. **Build a comparable request:** customer/category, origin/destination, zone, product and package rows, chargeable-weight inputs, payment mode, COD amount, and shipment mode.
+2. **Resolve customer selling price:** choose the applicable rate card and calculate the customer price, GST, and charges. Save the applied rate-card version and calculation inputs as a booking snapshot.
+3. **Request partner quotes:** call each enabled adapter independently; normalize currency, serviceability, Surface/Express cost, ETA, and charge breakdown. Persist every success and failure/reference needed for quote reporting. A failed partner should not hide successful quotes from others.
+4. **Manual selection:** display the comparison and require operator selection. Do not infer or automatically pick a “best” carrier.
+5. **Save draft:** persist the editable booking and its pricing/quote references without making a manifestation/AWB request. On resume, preserve entered data and refresh quotes when expired.
+6. **Generate AWB:** atomically reserve the booking transition, call only the selected partner, store its AWB and partner booking reference, label reference, final response metadata, and status. Keep existing duplicate-reference protection and uncertain-carrier-response safeguards.
+7. **Show immutable economics:** retain original API quote, customer selling rate, and charge/GST snapshot. Track final partner invoice cost separately when its source becomes available; recalculate the shipment’s profitability record only through an explicit cost reconciliation action, never by changing the original quote or customer rate.
+
+## 6. Unresolved client rules and external dependencies
+
+These must be settled before finalizing calculations or partner adapters:
+
+- How destination zones are defined and mapped from pincodes; whether zones differ by courier.
+- Weight-slab boundaries, minimum/next slab behavior, rounding precision, volumetric divisor, and whether carrier-specific chargeable weight is per package or aggregated.
+- Whether COD collection amount must equal order value; COD fee rules and taxes.
+- Fuel/other surcharge calculation and GST rules, including what portion of partner GST is recoverable for the Section 8 profit formula.
+- How customer selling rate and final invoice amount are rounded and displayed; treatment of discounts or other charges.
+- Quote expiry and refresh behavior; handling of unavailable service, missing ETA, carrier timeouts, partial responses, or duplicate quote calls.
+- Source/timing of **final partner invoice cost**: partner API, later invoice import, or authorized manual entry.
+- Required shipper, consignee, pickup, product-category, GST, and special-handling fields per carrier.
+- Which additional couriers are in scope, and their official API documentation, sandbox/base URLs, credentials, rate/serviceability/manifestation endpoints, authentication rules, response/error formats, and label behavior. Current Delhivery code demonstrates only the Delhivery integration; no other carrier capability or live endpoint behavior has been verified.
+
+## 7. Milestones and testing checklist
+
+1. **Requirements and data contract**
+   - Confirm the business rules above and partner list/API documentation.
+   - Define normalized booking, quote, rate-card, and pricing-snapshot shapes.
+   - Record legacy response/data compatibility requirements.
+
+2. **Customer, saved parties, and rate cards**
+   - Add models, owner-scoped routes/controllers, validation, and list/edit screens.
+   - Check credit and walk-in behavior, duplicate/customer isolation, saved-address reuse, and rate-card effective-date resolution.
+   - Verify existing shipment records load unchanged.
+
+3. **Pricing engine and courier adapters**
+   - Implement pure customer-rate and weight calculations plus a normalized provider contract.
+   - Use mocked/stubbed provider responses for comparison and partial-failure cases; do not call Delhivery in this phase.
+   - Check zone/slab boundaries, dimensional weight, rounding, surcharges, GST, quote persistence, and quote expiry.
+
+4. **Booking form and rate comparison**
+   - Reorder sections to Appendix A and add customer/profile/rate fields.
+   - Verify required field validation, same-as-shipper/new pickup behavior, package rows, COD handling, manual carrier selection, and displayed price breakdown.
+
+5. **Draft/resume and AWB state transition**
+   - Test draft save without carrier booking, resume/edit, quote refresh, and transition to booking.
+   - Test duplicate submissions, concurrent requests, uncertain provider response, idempotent retry, and persisted AWB/partner reference.
+   - Verify legacy shipments, existing Delhivery shipment actions, and reverse orders remain intact.
+
+6. **Regression and acceptance**
+   - Extend the existing backend account-shipment route tests and frontend API/workspace tests with mocked responses.
+   - Confirm no legacy data migration is required—or define a reversible, additive migration if discovery shows one is necessary.
+   - Obtain client acceptance of comparison fields, calculations, and booking screen sequence before any live carrier testing.
+
+**Current-source references:** [active shipment creation and duplicate protection](D:/delhivery-backebnd/services/appShipmentRouter.js:143), [shipment model/indexes](D:/delhivery-backebnd/model/appShipment.js:2), [existing customer login model](D:/delhivery-backebnd/model/model.js:3), [front-end shipment payload](D:/delhivery/src/services/api.js:141), [existing Delhivery Surface/Express quote calls](D:/delhivery/src/pages/shipments/CreateShipmentPage.jsx:37).
+
+This plan is ready for review. **I’ll wait for explicit approval before making code changes.**

@@ -1,5 +1,6 @@
 ﻿const Shipment = require("../model/appShipment");
 const carrier = require("../services/delhiveryService");
+const { isDelhiveryFeatureEnabled, delhiveryFeatureDisabledResponse } = require("../utils/delhiveryFeatureFlags");
 
 function isRejected(value) {
   return !value ||
@@ -43,6 +44,7 @@ exports.listReverseOrders = async (req, res) => {
 };
 
 exports.createReverseOrder = async (req, res) => {
+  if (!isDelhiveryFeatureEnabled("REVERSE_ORDERS")) return delhiveryFeatureDisabledResponse(res, "REVERSE_ORDERS");
   const input = req.body || {};
   const orderId = String(input.reverseOrderId || "").trim();
   const referenceNumber = String(input.referenceNumber || "").trim();
@@ -191,9 +193,13 @@ exports.createReverseOrder = async (req, res) => {
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
     providerData = response.data;
-  } catch {
+  } catch (error) {
+    try {
+      await Shipment.updateOne({ _id: intent._id, owner: req.user.id, state: "creating", kind: "reverse" }, { $set: { "record.providerAttempt": { outcome: error?.response ? "HTTP_ERROR" : "TRANSPORT_ERROR", httpStatus: Number.isInteger(error?.response?.status) ? error.response.status : undefined, contentType: String(error?.response?.headers?.["content-type"] || "").slice(0, 120) || undefined, correlationId: req.correlationId || null, recordedAt: new Date() } } });
+    } catch { /* Preserve the uncertain result even if evidence persistence is unavailable. */ }
     return res.status(502).json({
       success: false,
+      code: "REVERSE_ORDER_OUTCOME_UNCONFIRMED",
       message: "Delhivery did not confirm creation. Check this order in Delhivery before retrying.",
     });
   }
@@ -210,13 +216,14 @@ exports.createReverseOrder = async (req, res) => {
     return res.status(502).json({
       success: false,
       message: `Delhivery did not confirm the reverse order. ${reason} Check the order before retrying.`,
-      data: providerData,
     });
   }
 
   const record = {
     id: String(waybill),
     waybill: String(waybill),
+    providerCode: "DELHIVERY",
+    providerOutcome: "PROVIDER_CONFIRMED",
     kind: "reverse",
     reverseOrderId: orderId,
     reference: referenceNumber,

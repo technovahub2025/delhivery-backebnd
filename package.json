@@ -7,5 +7,10 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.5"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "npm run test:safe",
+    "test:safe": "node --test route/accountShipmentRoutes.test.js route/authRbacCompatibility.test.js route/customerRateCardRoutes.test.js route/customerRoutes.test.js route/directBookingConfigurationRoutes.test.js route/savedPartyAddressRoutes.test.js route/pickupRequestRoutes.test.js route/shipmentDraftRoutes.test.js route/shipmentQuoteRoutes.test.js route/mockCourierDiagnosticRoutes.test.js route/shipmentTrackingRoutes.test.js route/trackingWebhookRoutes.test.js route/ndrRoutes.test.js route/rtoRoutes.test.js route/dashboardRoutes.test.js route/creditCustomerBillingRoutes.test.js route/partnerCostRoutes.test.js route/profitabilityReportRoutes.test.js route/operationalSearchRoutes.test.js route/businessAuditRoutes.test.js utils/businessAudit.test.js utils/requestLogging.test.js route/delhiveryroutes.test.js route/rbacRoutes.test.js services/dashboardService.test.js services/customerPricingService.test.js services/financialReportExportService.test.js services/providerStatusMappings.test.js services/courierQuotationService.test.js services/delhiveryCourierAdapter.test.js services/mockCourierAdapter.test.js utils/safeReadRetry.test.js utils/backupMetadata.test.js utils/delhiveryFeatureFlags.test.js"
   }
 }

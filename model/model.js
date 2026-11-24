@@ -21,6 +21,21 @@ const userSchema = new mongoose.Schema(
       required: true,
       minlength: 6,
     },
+    // Existing users remain unassigned until an approved migration is applied.
+    roleKey: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    authzVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    active: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
     timestamps: true,

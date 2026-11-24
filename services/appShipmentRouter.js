@@ -1,12 +1,13 @@
 const express = require("express");
 const requireSession = require("../utils/requireSession");
-
-function rejected(data) {
-  return !data || data.success === false || data.status === false ||
-    /^(fail|failed|failure|error)$/i.test(data.status || "") ||
-    Boolean(data.error && data.error !== "false") ||
-    Boolean(data.errors && Object.keys(data.errors).length);
-}
+const { shipmentGroup, shipmentDashboardTags } = require("./dashboardService");
+const { createDelhiveryCourierAdapter, classifyBookingResponse } = require("./delhiveryCourierAdapter");
+const { safeProviderSnapshot } = require("../utils/delhiveryError");
+const { findRegisteredWarehouse, snapshotFromWarehouse } = require("./warehouseValidation");
+const { isDelhiveryFeatureEnabled, delhiveryFeatureDisabledResponse } = require("../utils/delhiveryFeatureFlags");
+const { buildPricingSnapshot, resolveCustomerCard } = require("./customerPricingService");
+const { validateQuote, partnerCostSnapshots } = require("./courierQuotationService");
+const mongoose = require("mongoose");
 
 function rejectionReason(data, parcel) {
   const messages = [
@@ -49,11 +50,14 @@ function normalize(input, warehouse, waybill, createdAt) {
     date: new Date(createdAt).toISOString().slice(0, 10),
     status: "Pending pickup",
     history: [],
+    providerCode: "DELHIVERY",
+    providerOutcome: "PROVIDER_CONFIRMED",
   };
 }
 
-module.exports = function appShipmentRouter({ Shipment, carrier }) {
+module.exports = function appShipmentRouter({ Shipment, Warehouse, Customer, RateCard, carrier, statusMappings = {}, getEnvironment = () => process.env }) {
   const router = express.Router();
+  const getDelhiveryAdapter = () => createDelhiveryCourierAdapter(carrier, { getEnvironment });
 
   // MongoDB-only lookup for an existing forward shipment.
   router.get("/shipments/lookup", requireSession, async (req, res) => {
@@ -76,7 +80,6 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
         data: { shipment: { ...shipment.record, waybill: shipment.waybill, reference: shipment.record.reference || shipment.reference } },
       });
     } catch (error) {
-      console.error("Original shipment lookup failed:", error.message);
       return res.status(503).json({ success: false, message: "Could not fetch the saved shipment from MongoDB." });
     }
   });
@@ -125,7 +128,12 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
       return res.json({
         success: true,
         data: {
-          shipments: rows.map(row => row.record),
+          // Return only the canonical dashboard group alongside the existing
+          // account record. Provider codes, raw tracking events and mappings
+          // remain private to the backend.
+          shipments: rows.map(row => row.record
+            ? { ...row.record, dashboardStatus: shipmentGroup(row, statusMappings), dashboardTags: shipmentDashboardTags(row, statusMappings) }
+            : row.record),
           total,
           page: Number(page),
           limit: Number(limit),
@@ -141,13 +149,13 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
   });
 
   router.post("/shipments", requireSession, async (req, res) => {
-    const input = req.body?.shipments?.[0];
+    const submitted = req.body?.shipments?.[0];
 
     if (
       !Array.isArray(req.body?.shipments) ||
       req.body.shipments.length !== 1 ||
-      typeof input?.order !== "string" ||
-      !input.order.trim()
+      typeof submitted?.order !== "string" ||
+      !submitted.order.trim()
     ) {
       return res.status(400).json({
         success: false,
@@ -155,7 +163,15 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
       });
     }
 
+    // This legacy endpoint calls Delhivery directly, outside the adapter
+    // registry. Require an explicit opt-in before reserving or contacting it.
+    if (!isDelhiveryFeatureEnabled("SHIPMENT_BOOKING", getEnvironment())) return delhiveryFeatureDisabledResponse(res, "SHIPMENT_BOOKING");
+    const input = { ...submitted, order: submitted.order.trim() };
+
     let intent;
+    let providerPayload;
+    let registeredWarehouse;
+    let bookingPricing;
 
     try {
       await Shipment.init();
@@ -180,11 +196,72 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
         });
       }
 
+      const warehouseId = req.body?.pickup_location?.warehouseId;
+      try {
+        registeredWarehouse = await findRegisteredWarehouse(Warehouse, req.user.id, warehouseId);
+      } catch {
+        return res.status(503).json({ success: false, code: "WAREHOUSE_LOOKUP_FAILED", message: "Warehouse registration could not be verified. No booking request was sent." });
+      }
+      if (!registeredWarehouse) {
+        return res.status(400).json({ success: false, code: "WAREHOUSE_INVALID", message: "Select a registered warehouse belonging to this account before booking." });
+      }
+      if (!/^\d{6}$/.test(String(input.pin || "")) || !/^(COD|PRE-?PAID)$/i.test(String(input.payment_mode || ""))) {
+        return res.status(400).json({ success: false, message: "Provide a valid destination pincode and payment mode." });
+      }
+      const { customerId, zone, chargeableWeight } = req.body.pricingInput || {};
+      const mode = String(input.shipping_mode || "").trim().toUpperCase();
+      const actualWeight = Number(input.weight) / 1000;
+      const paymentType = String(input.payment_mode).toUpperCase() === "COD" ? "COD" : "PREPAID";
+      const codAmount = paymentType === "COD" ? Number(input.cod_amount) : 0;
+      if (!Customer || !RateCard || !mongoose.isValidObjectId(customerId) ||
+        typeof zone !== "string" || !zone.trim() || zone.length > 100 || !Number.isFinite(chargeableWeight) ||
+        !Number.isFinite(actualWeight) || actualWeight <= 0 || chargeableWeight < actualWeight ||
+        !["SURFACE", "EXPRESS"].includes(mode) || (paymentType === "COD" && (!Number.isFinite(codAmount) || codAmount <= 0))) {
+        return res.status(400).json({ success: false, code: "BOOKING_PRICING_INPUT_INVALID", message: "Provide a customer, zone, shipping mode, valid shipment weights and the collection amount for COD." });
+      }
+      const customer = await Customer.findOne({ _id: customerId, owner: req.user.id }).lean();
+      if (!customer) return res.status(404).json({ success: false, code: "BOOKING_CUSTOMER_INVALID", message: "Customer not found." });
+      const rate = customer.rateCardId && await RateCard.findOne({ _id: customer.rateCardId, owner: req.user.id }).lean();
+      const card = resolveCustomerCard(customer, rate ? [rate] : []);
+      const snapshot = buildPricingSnapshot(card, { zone: zone.trim(), chargeableWeight, paymentType, codAmount });
+      if (snapshot.customerSelling?.[mode]?.status !== "READY") {
+        return res.status(409).json({ success: false, code: "BOOKING_PRICING_CONFIGURATION_REQUIRED", message: "Direct booking requires an approved selling price for the selected customer and mode." });
+      }
+      const { _id, owner, __v, createdAt, updatedAt, ...customerData } = customer;
+      bookingPricing = { customerSnapshot: { id: String(_id), ...customerData }, rateCardSnapshot: snapshot.card,
+        rateCardConfigurationSnapshot: snapshot.rateCardConfiguration, customerSellingPriceSnapshot: snapshot,
+        customerTaxBasisSnapshot: snapshot.taxBasis || null, warehouseSnapshot: snapshotFromWarehouse(registeredWarehouse), mode };
+      const { pricingInput, ...providerBody } = req.body;
+      providerPayload = {
+        ...providerBody,
+        shipments: [input],
+        pickup_location: { name: registeredWarehouse.name },
+      };
+      let serviceable;
+      try {
+        serviceable = await getDelhiveryAdapter().checkServiceability({ pincode: input.pin, paymentType: input.payment_mode });
+      } catch {
+        return res.status(503).json({ success: false, code: "BOOKING_SERVICEABILITY_UNAVAILABLE", message: "Courier serviceability could not be verified. No booking request was sent." });
+      }
+      if (!serviceable) return res.status(409).json({ success: false, code: "QUOTE_NOT_SERVICEABLE", message: "The courier has not confirmed serviceability for this shipment." });
+      let partnerQuote = null;
+      if (isDelhiveryFeatureEnabled("SHIPPING_COST", getEnvironment()) && /^\d{6}$/.test(bookingPricing.warehouseSnapshot?.pincode || "")) {
+        try {
+          const adapter = getDelhiveryAdapter();
+          partnerQuote = validateQuote(adapter, await adapter.quote({ partnerInput: {
+            originPincode: bookingPricing.warehouseSnapshot.pincode,
+            destinationPincode: String(input.pin), chargeableWeightKg: chargeableWeight, mode, paymentType, codAmount,
+          } }));
+        } catch { /* Keep the carrier estimate unavailable and retain the independently calculated selling price. */ }
+      }
+      Object.assign(bookingPricing, partnerCostSnapshots(partnerQuote));
+
       intent = await Shipment.create({
         owner: req.user.id,
         reference: input.order,
         state: "creating",
         kind: "forward",
+        record: bookingPricing,
       });
     } catch (error) {
       return res.status(error.code === 11000 ? 409 : 503).json({
@@ -198,7 +275,7 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
     try {
       const response = await carrier.post(
         "/api/cmu/create.json",
-        `format=json&data=${encodeURIComponent(JSON.stringify(req.body))}`,
+        `format=json&data=${encodeURIComponent(JSON.stringify(providerPayload))}`,
         {
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -215,24 +292,15 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
     }
 
     const parcel = data?.packages?.[0];
-    const waybill = parcel?.waybill || parcel?.wbn || parcel?.AWB;
+    const { waybill, outcome } = classifyBookingResponse(data, parcel);
 
-    if (rejected(data) || rejected(parcel) || !waybill) {
-      const uncertain =
-        /partially\s+saved|might\s+have\s+been|may\s+have\s+been|internal\s+error|crashing\s+while\s+saving/i
-          .test(JSON.stringify(data));
-
-      if (
-        !uncertain &&
-        !waybill &&
-        (
-          data?.success === false ||
-          /^(fail|failed|error)$/i.test(parcel?.status || "")
-        )
-      ) {
+    if (outcome !== "CONFIRMED") {
+      const uncertain = outcome === "AMBIGUOUS";
+      if (!uncertain) {
         try {
           await Shipment.deleteOne({
             _id: intent._id,
+            owner: req.user.id,
             state: "creating",
           });
         } catch {
@@ -240,33 +308,37 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
         }
       }
 
-      const reason = rejectionReason(data, parcel);
+      const safeData = safeProviderSnapshot(data);
+      const reason = rejectionReason(safeData, safeData?.packages?.[0]);
       const insufficientBalance = /insufficient\s+balance/i.test(reason);
+      const uncertainSaveWarning =
+        "The package might have been partially saved. Verify the original order/reference with Delhivery before retrying. Do not submit it with a new reference until you confirm the original request was not saved.";
 
       const message = insufficientBalance
         ? "Delhivery reported insufficient balance in the prepaid carrier account. Recharge the account or contact your account administrator. " +
           (uncertain
-            ? "The package might have been partially saved. Check Delhivery before retrying."
+            ? uncertainSaveWarning
             : "Check the order in Delhivery before retrying.")
         : "Delhivery did not confirm an accepted shipment. " +
           (reason ? `Reason: ${reason} ` : "") +
           (uncertain
-            ? "The package might have been partially saved. Check Delhivery before retrying."
+            ? uncertainSaveWarning
             : "Check the order before retrying.");
 
       return res.status(502).json({
         success: false,
         message,
-        data,
+        data: safeData,
       });
     }
 
     const record = normalize(
       input,
-      req.body.pickup_location?.name,
+      registeredWarehouse.name,
       waybill,
       intent.createdAt
     );
+    Object.assign(record, bookingPricing);
 
     const receipt = {
       success: true,
@@ -320,6 +392,8 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
 
   for (const action of ["update", "cancel", "ewaybill"]) {
     router.post(`/shipments/${action}`, requireSession, async (req, res) => {
+      const actionFeature = action === "cancel" ? "SHIPMENT_CANCELLATION" : action === "ewaybill" ? "EWAYBILL" : "SHIPMENT_UPDATE";
+      if (!isDelhiveryFeatureEnabled(actionFeature, getEnvironment())) return delhiveryFeatureDisabledResponse(res, actionFeature);
       const waybill = req.body?.waybill;
 
       if (typeof waybill !== "string" || !waybill) {
@@ -344,6 +418,8 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
           });
         }
 
+        const adapter = getDelhiveryAdapter();
+
         const body = { waybill };
         const allowed =
           action === "ewaybill"
@@ -356,19 +432,20 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
           }
         }
 
-        if (action === "cancel") {
-          body.status = "Cancelled";
+        let result;
+        try {
+          result = action === "cancel"
+            ? await adapter.cancelShipment({ waybill })
+            : action === "ewaybill"
+              ? await adapter.updateEwaybill({ waybill, ewbn: body.ewbn })
+              : await adapter.updateShipment(body);
+        } catch (error) {
+          if (error?.definitive === true || error?.outcome === "REJECTED") {
+            return res.status(502).json({ success: false, message: "Delhivery rejected the update.", data: safeProviderSnapshot(error.responseSnapshot) });
+          }
+          return res.status(503).json({ success: false, message: "Shipment action could not be confirmed. Check its status before retrying." });
         }
-
-        const { data } = await carrier.post("/api/p/edit", body);
-
-        if (rejected(data)) {
-          return res.status(502).json({
-            success: false,
-            message: "Delhivery rejected the update.",
-            data,
-          });
-        }
+        const data = result.responseSnapshot;
 
         const changes = {};
 
@@ -406,7 +483,7 @@ module.exports = function appShipmentRouter({ Shipment, carrier }) {
           });
         }
 
-        return res.json({ success: true, data });
+        return res.json({ success: true, data: safeProviderSnapshot(data) });
       } catch {
         return res.status(503).json({
           success: false,

@@ -1,40 +1,37 @@
-# Delhivery controllers
+# Delhivery B2C integration matrix
 
-Each of the 15 handlers from the supplied code has its own file in `controller/`. Request parameters, upstream API paths, and responses are preserved.
+App routes below are relative to `/api/delhivery`. Outbound requests use the shared server-side `DELHIVERY_BASE_URL` and `DELHIVERY_API_TOKEN` configuration. Operator routes require a JWT and use the existing RBAC mapping when enforcement is enabled. Carrier mutations have independent gates and never execute in mock mode. Verification in this matrix is local and uses mocked provider I/O.
 
-## Configuration
+| API | Backend and upstream endpoint | Frontend | Request and response handling | Gate suffix | Verification |
+| --- | --- | --- | --- | --- | --- |
+| Pincode Serviceability | `GET /pincode` → `GET /c/api/pin-codes/json/` | Standalone standard tool and booking destination | Validates PIN, distinguishes prepaid/COD from pickup-only service, honors embargo, includes source and retries transient read failures. Sample results require an explicit isolated sample request. | Defaults to live with configured HTTPS URL and token when the independent PIN capability flag is unset | Chrome verified both screens with mock booking enabled. Linked DevTools responses and redacted carrier log records are in the SRD audit. |
+| Fetch Waybill | `POST /waybills` → `GET /waybill/api/bulk/json/` | Waybill Management | Validates the requested count and returns `data.waybills` only for a complete unique batch. GET and HEAD on the app do not allocate. An uncertain reply is not retried. | `WAYBILL_ALLOCATION` | Mock route and browser tests. Confirm the account's header versus legacy query authentication and response against staging. |
+| Shipment Manifestation and recovery | `POST /shipments` and `POST /shipments/drafts/:id/book` → `POST /api/cmu/create.json`; `POST /shipments/drafts/:id/reconcile` uses Tracking | Legacy and selected-quote booking; draft reconciliation shows recovered AWB | New Delhivery draft attempts persist a unique provider order reference before submission. Recovery requires one exact reference match and a usable, unassigned AWB. Empty or ambiguous results preserve the reservation. Multi-piece drafts are rejected before submission. | `SHIPMENT_BOOKING` plus preflight gates; `TRACKING` independently for recovery | Mock adapter/route tests. Legacy bookings without an attempt reference still require manual verification. |
+| Shipment Updation | `POST /shipments/update` → `POST /api/p/edit` | Shipment actions | Owns AWB, allowlists editable fields and updates local data after carrier response. | `SHIPMENT_UPDATE` | Mock route and adapter tests |
+| Shipment Cancellation | `POST /shipments/cancel` → `POST /api/p/edit` | Shipment actions | Checks ownership and sends the documented cancellation field. Retains existing local acceptance checks. | `SHIPMENT_CANCELLATION` | Mock route and wire-format tests |
+| Ewaybill Management | `POST /shipments/ewaybill` → `POST /api/p/edit` | Shipment actions | Checks ownership and sends `ewbn`. | `EWAYBILL` | Mock route and adapter tests |
+| Shipment Tracking | `GET /track` (stored); `POST /shipments/:id/tracking/sync` → `GET /api/v1/packages/json/` | Tracking screen | Uses the owned shipment, prefers AWB, filters mismatched results and preserves scans, locations, status type and code. Offset-less timestamps require configured source offset. | `TRACKING` for upstream sync | Mock adapter and route tests; confirm account scan/offset examples |
+| Calculate Shipping Cost | `GET /shipping-cost` and draft quote route → `GET /api/kinko/v1/invoice/charges/.json` | Cost tools and comparison | Validates PINs, mode, chargeable grams and payment type. Empty and zero quotes are unavailable. | `SHIPPING_COST` | Mock route and quote tests. Delhivery documents unavailable staging tariffs. |
+| Generate Shipping Label | `GET /shipping-label` → `GET /api/p/packing_slip` | Labels & documents | Validates one owned AWB; uses the PDF flag and surfaces a missing package as unavailable. | `LABELS` | Mock route and UI tests |
+| Pickup Request Creation and status | `POST /pickups` → `POST /fm/request/new/`; app `POST /pickup-requests/:id/sync` | Explicit carrier submission; sync action requires backend capability | The reservation prevents identical retries and the carrier ID confirms acceptance. Sync requires a provider adapter and configured status mapping. An unchanged status does not duplicate history. Local save remains available. | `PICKUP_CREATION`; `PICKUP_STATUS` independently | Mock route, adapter and UI tests. Delhivery documents pickup detail in its account MCP, but the B2C REST contract for this transport is unavailable. |
+| Client Warehouse Creation | `POST /warehouses` → `POST /api/backend/clientwarehouse/create/` | Warehouse UI | Validates contact and address fields, reserves ownership and persists registration outcome. | `WAREHOUSE_CREATE` | Mock route tests |
+| Client Warehouse Updation | `POST /warehouses/update` → `POST /api/backend/clientwarehouse/edit/` | Warehouse UI | Resolves owned warehouse and retains update outcome. | `WAREHOUSE_UPDATE` | Mock route tests |
+| Webhook Functionality | `POST /webhook` (inbound); `GET /webhook/events` (archive) | Webhook Events lists and filters accepted scans and distinguishes loading, empty history and errors | Inbound requires configured sender authentication. Archive reads require a user session and use the owner and provider. The application returns projected event details rather than raw callback payloads. | `TRACKING_WEBHOOK` for inbound only; `tracking.read` RBAC permission for archive reads | Mounted route, archive filtering and browser tests with fixtures. Account callback registration, sender auth and timestamp offset require confirmation. |
+| Download Document API | `GET /documents` → `GET /api/rest/fetch/pkg/document/` | Labels & documents | Owned AWB and allowlisted document type. Existing UI parses supported links. | `DOCUMENTS` | Mock route and UI tests. Confirm account-specific response and document availability. |
+| RVP QC 3.0 | Standard `POST /reverse-orders` exists; no verified QC 3.0 implementation | Reverse Orders | Standard reverse manifestation remains separate. | `REVERSE_ORDERS` for standard RVP | Need the QC 3.0 endpoint, schema, required questions/evidence, response, and account enablement. |
+| NDR API | `POST /ndr/cases/:id/actions` → `POST /api/p/update`; app `GET /ndr/status/:uplId` retains its existing upstream lookup | NDR action and UPL status tools show the owned waybill and an unconfirmed per-AWB outcome | Owner checks, one-action submission and required UPL acknowledgement. The application does not expose the provider batch or infer a case transition from it. | `NDR_OPERATIONS` and `NDR_STATUS` independently | Mock action, route and gate tests. Need the current status URL and parameters, pending and partial upload responses, per-AWB terminal results, and account action fields. |
 
-Add these values to your existing `.env` using your Delhivery environment URL and token:
+Gate suffixes use the `DELHIVERY_<SUFFIX>_ENABLED` format. See [feature gates](docs/DELHIVERY_FEATURE_FLAGS.md) and [Scan Push setup](WEBHOOK.md).
 
-```dotenv
-DELHIVERY_BASE_URL=https://staging-express.delhivery.com
-DELHIVERY_API_TOKEN=your_delhivery_token
-```
+## Contract and acceptance plan
 
-Keep your existing MongoDB and JWT settings. Start with `node server.js`.
+1. Verify the known request/response changes with local fixtures. For account validation, use the existing configured staging profile and an existing test AWB or equivalent fixture. Keep carrier writes disabled until authorized.
+2. Confirm bulk AWB authentication and acknowledgement with the account's exact export. Older reference pages show query credentials. The application maintains its existing header-only authentication and does not automatically retry or fall back.
+3. Obtain the account Scan Push sample and configured sender header, confirm its time offset, check the unique archive index on isolated MongoDB, and verify replay handling before activation.
+4. Verify positive-only AWB recovery in staging with a new attempt-specific Delhivery order reference. Earlier attempts and missing or conflicting results require manual verification.
+5. Obtain account-specific contracts for RVP QC 3.0, B2C pickup retrieval, multi-piece manifestation and per-AWB NDR results. For multi-piece, Delhivery documents one explicit AWB per box. Confirm master/child linkage, allocation and consumption, applicable count and weight rules, and partial acceptance/recovery before implementing it. Legacy and current NDR materials differ, so additional actions and terminal mappings remain disabled.
+6. Preserve customer pricing, GST and billing policy configuration. Keep provider rates separate from selling rates.
 
-## Routes
+[Manifestation and per-box AWBs](https://delhivery-express-api-doc.readme.io/reference/order-creation-api) · [Pickup lifecycle](https://help.delhivery.com/docs/pickup-request) · [Delhivery One MCP pickup details](https://help.delhivery.com/docs/delhivery-one-mcp-setup-use-cases-example)
 
-| Method | Local endpoint | Controller |
-| --- | --- | --- |
-| GET | /api/delhivery/pincode | [checkPincodeController.js](controller/checkPincodeController.js) |
-| GET | /api/delhivery/pincode/heavy | [checkHeavyPincodeController.js](controller/checkHeavyPincodeController.js) |
-| GET | /api/delhivery/expected-tat | [getExpectedTatController.js](controller/getExpectedTatController.js) |
-| GET | /api/delhivery/waybills | [fetchWaybillController.js](controller/fetchWaybillController.js) |
-| POST | /api/delhivery/shipments | [createShipmentController.js](controller/createShipmentController.js) |
-| POST | /api/delhivery/shipments/update | [updateShipmentController.js](controller/updateShipmentController.js) |
-| POST | /api/delhivery/shipments/cancel | [cancelShipmentController.js](controller/cancelShipmentController.js) |
-| POST | /api/delhivery/shipments/ewaybill | [updateEwaybillController.js](controller/updateEwaybillController.js) |
-| GET | /api/delhivery/shipments/track | [trackShipmentController.js](controller/trackShipmentController.js) |
-| GET | /api/delhivery/shipping-cost | [calculateShippingCostController.js](controller/calculateShippingCostController.js) |
-| GET | /api/delhivery/shipping-label | [generateShippingLabelController.js](controller/generateShippingLabelController.js) |
-| POST | /api/delhivery/pickups | [createPickupRequestController.js](controller/createPickupRequestController.js) |
-| POST | /api/delhivery/warehouses | [createWarehouseController.js](controller/createWarehouseController.js) |
-| POST | /api/delhivery/warehouses/update | [updateWarehouseController.js](controller/updateWarehouseController.js) |
-| GET | /api/delhivery/documents | [downloadDocumentController.js](controller/downloadDocumentController.js) |
-
-GET handlers use `req.query`; POST handlers use `req.body`. For example: `GET /api/delhivery/pincode?pincode=110001`.
-
-`route/delhiveryroutes.js` connects the controllers to Express. `services/delhiveryService.js` provides the shared Axios client; `utils/delhiveryError.js` handles API errors. The existing `controller/pincodecontroller.js` remains available, but the new routes use the handlers from the attachment.
-
-These routes currently have no authentication middleware. Live Delhivery calls require valid account configuration and have not been verified.
+[Delhivery B2C catalogue](https://one.delhivery.com/developer-portal/documents/b2c/) · [B2C FAQ](https://one.delhivery.com/developer-portal/document/b2c/detail/faq) · [Bulk AWB reference](https://delhivery-express-api-doc.readme.io/reference/bulk-waybill) · [Cancellation request](https://delhivery-express-api-doc.readme.io/reference/testinput-5) · [Pickup request](https://delhivery-express-api-doc.readme.io/reference/testpickup-request) · [Tracking](https://one.delhivery.com/developer-portal/document/b2c/detail/order-tracking) · [NDR action reference](https://delhivery-express-api-doc.readme.io/reference/asynchronous-ndr-package-action-api)

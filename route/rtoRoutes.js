@@ -1,0 +1,9 @@
+const Shipment = require("../model/appShipment");
+const RtoRecord = require("../model/rtoRecord");
+const carrier = require("../services/delhiveryService");
+const { createPartnerRegistry } = require("../services/courierQuotationService");
+const { createDelhiveryCourierAdapter } = require("../services/delhiveryCourierAdapter");
+const { loadStatusMappings } = require("../services/providerStatusMappings");
+const { isDelhiveryFeatureEnabled } = require("../utils/delhiveryFeatureFlags");
+const adapters = isDelhiveryFeatureEnabled("TRACKING") ? [createDelhiveryCourierAdapter(carrier)] : [];
+module.exports = require("../services/rtoRouter").createRtoRouter({ Shipment, RtoRecord, partnerRegistry: createPartnerRegistry(adapters), statusMappings: loadStatusMappings() });

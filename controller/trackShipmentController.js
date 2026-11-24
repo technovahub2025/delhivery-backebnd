@@ -1,7 +1,9 @@
 const delhiveryApi = require("../services/delhiveryService");
 const handleError = require("../utils/delhiveryError");
+const { isDelhiveryFeatureEnabled, delhiveryFeatureDisabledResponse } = require("../utils/delhiveryFeatureFlags");
 
 exports.trackShipment = async (req, res) => {
+  if (!isDelhiveryFeatureEnabled("TRACKING")) return delhiveryFeatureDisabledResponse(res, "TRACKING");
   try {
     const { waybill, ref_ids = "" } = req.query;
 

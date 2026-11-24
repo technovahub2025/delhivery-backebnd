@@ -83,8 +83,7 @@ export function createApi({ baseURL = "http://localhost:3000/api", adapter } = {
     getExpectedTat: ({ origin_pin, destination_pin, mot = "S" }, signal) =>
       get("/delhivery/expected-tat", { origin_pin, destination_pin, mot }, signal),
 
-    // Explicit user action only: this GET allocates waybills.
-    fetchWaybill: (count = 1) => get("/delhivery/waybills", { count }),
+    fetchWaybill: (count, requestId) => post("/delhivery/waybills", { count, requestId }),
 
     createShipment: (body) => post("/delhivery/shipments", body),
     updateShipment: (body) => post("/delhivery/shipments/update", body),

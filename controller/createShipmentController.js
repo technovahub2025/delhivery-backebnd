@@ -1,7 +1,9 @@
 const delhiveryApi = require("../services/delhiveryService");
 const handleError = require("../utils/delhiveryError");
+const { isDelhiveryFeatureEnabled, delhiveryFeatureDisabledResponse } = require("../utils/delhiveryFeatureFlags");
 
 exports.createShipment = async (req, res) => {
+  if (!isDelhiveryFeatureEnabled("SHIPMENT_BOOKING")) return delhiveryFeatureDisabledResponse(res, "SHIPMENT_BOOKING");
   try {
     const shipmentData = req.body;
 

@@ -1,7 +1,9 @@
 const delhiveryApi = require("../services/delhiveryService");
 const handleError = require("../utils/delhiveryError");
+const { isDelhiveryFeatureEnabled, delhiveryFeatureDisabledResponse } = require("../utils/delhiveryFeatureFlags");
 
 exports.cancelShipment = async (req, res) => {
+  if (!isDelhiveryFeatureEnabled("SHIPMENT_CANCELLATION")) return delhiveryFeatureDisabledResponse(res, "SHIPMENT_CANCELLATION");
   try {
     const { waybill } = req.body;
 

@@ -1,8 +1,10 @@
 const axios = require("axios");
+const { isDelhiveryFeatureEnabled, delhiveryFeatureDisabledResponse } = require("../utils/delhiveryFeatureFlags");
 
 
 
 exports.checkPincodeServiceability = async (req, res) => {
+  if (!isDelhiveryFeatureEnabled("PINCODE_SERVICEABILITY")) return delhiveryFeatureDisabledResponse(res, "PINCODE_SERVICEABILITY");
   try {
     const { pincode } = req.query;
 
@@ -79,10 +81,6 @@ exports.checkPincodeServiceability = async (req, res) => {
       data: result,
     });
   } catch (error) {
-    console.error(
-      "Delhivery Pincode Error:",
-      error.response?.data || error.message
-    );
 
     return res.status(error.response?.status || 500).json({
       success: false,
@@ -98,6 +96,7 @@ exports.checkPincodeServiceability = async (req, res) => {
 // ==========================================
 
 exports.checkHeavyPincodeServiceability = async (req, res) => {
+  if (!isDelhiveryFeatureEnabled("HEAVY_PINCODE_SERVICEABILITY")) return delhiveryFeatureDisabledResponse(res, "HEAVY_PINCODE_SERVICEABILITY");
   try {
     const { pincode } = req.query;
 
@@ -149,10 +148,6 @@ exports.checkHeavyPincodeServiceability = async (req, res) => {
       data: data,
     });
   } catch (error) {
-    console.error(
-      "Delhivery Heavy Pincode Error:",
-      error.response?.data || error.message
-    );
 
     return res.status(error.response?.status || 500).json({
       success: false,

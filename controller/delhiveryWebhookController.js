@@ -22,7 +22,6 @@ exports.delhiveryWebhook = async (req, res) => {
       message: "Webhook received successfully",
     });
   } catch (error) {
-    console.error("Delhivery webhook processing failed:", error.name);
 
     return res.status(500).json({
       success: false,
