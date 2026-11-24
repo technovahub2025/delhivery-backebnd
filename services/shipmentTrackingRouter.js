@@ -2,6 +2,8 @@ const crypto = require("node:crypto");
 const express = require("express");
 const requireSession = require("../utils/requireSession");
 const { withSafeReadRetry, singleFlight } = require("../utils/safeReadRetry");
+const { readDelhiveryConfiguration } = require("../utils/delhiveryConfiguration");
+const { isDelhiveryFeatureEnabled } = require("../utils/delhiveryFeatureFlags");
 
 class TrackingInputError extends Error {}
 
@@ -88,11 +90,26 @@ async function appendTrackingEvents({ Shipment, shipment, providerCode, events, 
   throw error;
 }
 
-async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, source = "SYNC" }) {
+async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, source = "SYNC", getEnvironment = () => process.env }) {
   const code = String(row.record?.partnerCode || row.record?.carrierCode || row.draftData?.selectedPartnerQuote?.partnerCode || row.record?.providerCode || "").toUpperCase();
-  if (code === "DELHIVERY" && (row.record?.mockOnly === true || !/^\d{6,20}$/.test(row.waybill || ""))) return null;
+  if (code === "DELHIVERY" && row.record?.mockOnly === true) {
+    const error = new Error("Mock-only shipments cannot use live Delhivery tracking."); error.code = "TRACKING_ADAPTER_UNAVAILABLE"; throw error;
+  }
+  if (code === "DELHIVERY" && !/^\d{6,20}$/.test(row.waybill || "")) {
+    const error = new Error("A genuine numeric Delhivery AWB is required for tracking."); error.code = "INVALID_TRACKING_AWB"; throw error;
+  }
   const adapter = partnerRegistry?.get(code);
-  if (!adapter || typeof adapter.track !== "function") return null;
+  if (!adapter || typeof adapter.track !== "function") {
+    if (code === "DELHIVERY") {
+      const environment = getEnvironment() || {};
+      const configuration = readDelhiveryConfiguration(environment);
+      const error = new Error(configuration ? "Delhivery tracking is disabled." : "Delhivery tracking configuration is missing.");
+      error.code = configuration && isDelhiveryFeatureEnabled("TRACKING", environment) === false
+        ? "TRACKING_FEATURE_DISABLED" : "DELHIVERY_CONFIGURATION_ERROR";
+      throw error;
+    }
+    return null;
+  }
   return singleFlight(`tracking:${row.owner}:${row._id}`, async () => {
     const providerResult = await withSafeReadRetry(
       () => adapter.track({ waybill: row.waybill, reference: row.reference, shipmentSnapshot: structuredClone(row) }),
@@ -103,7 +120,7 @@ async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now
   });
 }
 
-function createShipmentTrackingRouter({ Shipment, partnerRegistry, now }) {
+function createShipmentTrackingRouter({ Shipment, partnerRegistry, now, getEnvironment = () => process.env }) {
   const router = express.Router();
   router.use(requireSession);
 
@@ -134,20 +151,22 @@ function createShipmentTrackingRouter({ Shipment, partnerRegistry, now }) {
     try {
       const row = await readQuery(Shipment.findOne({ _id: req.params.id, owner: req.user.id, state: "saved" }));
       if (!row) return res.status(404).json({ success: false, message: "Shipment not found." });
-      const updated = await synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now });
+      const updated = await synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, getEnvironment });
       if (!updated) return res.status(409).json({ success: false, code: "TRACKING_ADAPTER_UNAVAILABLE", message: "Tracking synchronization is not configured for this courier." });
       return res.json({ success: true, data: {
         ...trackingResponse(updated.shipment),
         sync: { outcome: updated.empty ? "NO_EVENTS" : "RECEIVED", providerCode: updated.providerCode },
       } });
     } catch (error) {
+      if (error.code === "INVALID_TRACKING_AWB") return res.status(400).json({ success: false, code: error.code, message: error.message });
+      if (error.code === "TRACKING_ADAPTER_UNAVAILABLE") return res.status(409).json({ success: false, code: error.code, message: error.message });
       if (error instanceof TrackingInputError) return res.status(502).json({ success: false, code: "INVALID_PROVIDER_EVENTS", message: error.message });
       if (error.status === 409) return res.status(409).json({ success: false, message: error.message });
-      const configuration = error.code === "DELHIVERY_CONFIGURATION_ERROR" || error.code === "DELHIVERY_FEATURE_DISABLED";
+      const configuration = ["DELHIVERY_CONFIGURATION_ERROR", "DELHIVERY_FEATURE_DISABLED", "TRACKING_FEATURE_DISABLED"].includes(error.code);
       const timeout = ["ECONNABORTED", "ETIMEDOUT"].includes(error.code);
       const status = Number(error.response?.status);
       const hasProviderStatus = Number.isInteger(status) && status >= 100 && status <= 599;
-      const code = configuration ? "DELHIVERY_CONFIGURATION_ERROR" : timeout ? "COURIER_TIMEOUT" :
+      const code = error.code === "TRACKING_FEATURE_DISABLED" ? "TRACKING_FEATURE_DISABLED" : configuration ? "DELHIVERY_CONFIGURATION_ERROR" : timeout ? "COURIER_TIMEOUT" :
         error.code === "INVALID_TRACKING_RESPONSE" ? "INVALID_TRACKING_RESPONSE" :
           hasProviderStatus ? "COURIER_HTTP_ERROR" : "TRACKING_SYNC_FAILED";
       const message = configuration ? "Delhivery tracking is disabled or its credentials and HTTPS URL are missing." :

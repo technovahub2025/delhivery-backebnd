@@ -99,6 +99,17 @@ test("tracking sync stays unavailable when no matching carrier adapter exists", 
   assert.equal(f.rows[0].trackingRevision, 0);
 });
 
+test("Delhivery tracking rejects non-numeric AWBs before any carrier call", async t => {
+  let calls = 0;
+  const f = await fixture(t, [{ code: "DELHIVERY", quote: async () => ({}), track: async () => { calls += 1; return { events: [] }; } }]);
+  f.rows[0].record = { partnerCode: "DELHIVERY" };
+  f.rows[0].waybill = "MOCK-AWB-A";
+  const result = await f.request("/shipments/aaaaaaaaaaaaaaaaaaaaaaaa/tracking/sync", { method: "POST", body: {} });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, "INVALID_TRACKING_AWB");
+  assert.equal(calls, 0);
+});
+
 test("tracking sync classifies invalid responses with a safe code", async t => {
   const f = await fixture(t, [{ code: "MOCK", quote: async () => ({}), track: async () => { throw Object.assign(new Error("shape"), { code: "INVALID_TRACKING_RESPONSE" }); } }]);
   const result = await f.request("/shipments/aaaaaaaaaaaaaaaaaaaaaaaa/tracking/sync", { method: "POST", body: {} });
