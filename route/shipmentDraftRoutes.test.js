@@ -111,6 +111,22 @@ test("draft accepts the populated registered-warehouse client payload while cano
   assert.equal(response.body.data.draft.warehouseSnapshot.id, f.ids.idWarehouse);
 });
 
+test("draft accepts and strips the frontend pincode serviceability metadata", async t => {
+  const f = await fixture(t);
+  const response = await f.request("/shipments/drafts", "owner-a", "POST", {
+    formData: {
+      ...f.formData,
+      pincode: "600001",
+      pincodeServiceability: { pincode: "600001", prepaid: true, cod: true, provenance: "DELHIVERY_API" },
+      pincodeServiceable: true,
+    },
+  });
+  assert.equal(response.status, 201);
+  assert.equal(response.body.data.draft.formData.pincode, "600001");
+  assert.equal(response.body.data.draft.formData.pincodeServiceability, undefined);
+  assert.equal(response.body.data.draft.formData.pincodeServiceable, undefined);
+});
+
 test("owner can use a saved legacy warehouse without registrationStatus; another owner's saved warehouse is rejected", async t => {
   const f = await fixture(t);
   delete f.warehouse.registrationStatus;

@@ -12,7 +12,7 @@ const FORM_FIELDS = new Set([
   "shipperCity", "shipperState", "shipperPincode", "shipperGstin", "pickupChoice", "pickupContactName", "pickupPhone",
   "pickupEmail", "pickupAddress", "pickupCity", "pickupState", "pickupPincode", "email", "phone", "address", "pincode",
   "destination", "weight", "boxes", "actualWeightKg", "volumetricWeightKg", "chargeableWeightKg", "length", "width", "height",
-  "value", "payment", "mode", "pincodeServiceable", "productSearch", "destinationZone", "shipperAddressId", "consigneeAddressId", "pickupAddressId",
+  "value", "payment", "mode", "pincodeServiceable", "pincodeServiceability", "productSearch", "destinationZone", "shipperAddressId", "consigneeAddressId", "pickupAddressId",
   "productCategory", "handlingInstructions", "fragile",
   // Derived warehouse/serviceability fields are accepted for compatibility
   // with deployed clients; canonical values are still taken from the
@@ -61,6 +61,10 @@ module.exports = function shipmentDraftRouter({ Shipment, Customer, PartyAddress
     delete form.registeredWarehouse;
     delete form.warehouseRegistrationStatus;
     delete form.serviceability;
+    // Serviceability is a frontend display snapshot only. It must never be
+    // treated as carrier proof; booking performs a fresh server-side check.
+    delete form.pincodeServiceability;
+    delete form.pincodeServiceable;
     for (const [field, maxLength] of Object.entries({ productCategory: 120, handlingInstructions: 500 })) {
       if (!Object.hasOwn(form, field)) continue;
       if (typeof form[field] !== "string" || form[field].trim().length > maxLength) {
