@@ -14,6 +14,10 @@ const FORM_FIELDS = new Set([
   "destination", "weight", "boxes", "actualWeightKg", "volumetricWeightKg", "chargeableWeightKg", "length", "width", "height",
   "value", "payment", "mode", "pincodeServiceable", "productSearch", "destinationZone", "shipperAddressId", "consigneeAddressId", "pickupAddressId",
   "productCategory", "handlingInstructions", "fragile",
+  // Derived warehouse/serviceability fields are accepted for compatibility
+  // with deployed clients; canonical values are still taken from the
+  // owner-scoped warehouse record below.
+  "warehouseDetails", "registeredWarehouse", "warehouseRegistrationStatus", "serviceability",
 ]);
 const ADDRESS_TYPES = { shipperAddressId: "SHIPPER", consigneeAddressId: "CONSIGNEE", pickupAddressId: "PICKUP" };
 
@@ -46,9 +50,17 @@ module.exports = function shipmentDraftRouter({ Shipment, Customer, PartyAddress
   async function prepare(req) {
     if (!isObject(req.body) || !isObject(req.body.formData)) throw new DraftInputError("formData must be an object.");
     let form = req.body.formData;
-    if (Object.keys(form).some(key => !FORM_FIELDS.has(key))) throw new DraftInputError("formData contains unsupported fields.");
+    const unsupported = Object.keys(form).filter(key => !FORM_FIELDS.has(key));
+    if (unsupported.length) throw new DraftInputError(`formData contains unsupported fields: ${unsupported.join(", ")}.`);
     if (Buffer.byteLength(JSON.stringify(form), "utf8") > 65536) throw new DraftInputError("Draft formData exceeds 64 KB.");
     form = { ...form };
+    // These values are display metadata from newer clients. Never trust them
+    // for authorization or registration; the canonical warehouse is resolved
+    // by warehouseId and the serviceability snapshot is only informational.
+    delete form.warehouseDetails;
+    delete form.registeredWarehouse;
+    delete form.warehouseRegistrationStatus;
+    delete form.serviceability;
     for (const [field, maxLength] of Object.entries({ productCategory: 120, handlingInstructions: 500 })) {
       if (!Object.hasOwn(form, field)) continue;
       if (typeof form[field] !== "string" || form[field].trim().length > maxLength) {

@@ -95,6 +95,22 @@ test("draft create and retrieval persist full form data and owner snapshots with
   assert.equal((await f.request("/shipments/drafts")).body.data.drafts.length, 1);
 });
 
+test("draft accepts the populated registered-warehouse client payload while canonicalizing server-owned details", async t => {
+  const f = await fixture(t);
+  const populated = {
+    ...f.formData,
+    warehouseDetails: { name: "ABC Puducherry Warehouse", registrationStatus: "REGISTERED", pin: "605107" },
+    registeredWarehouse: { id: f.ids.idWarehouse, name: "ABC Puducherry Warehouse" },
+    warehouseRegistrationStatus: "REGISTERED",
+    serviceability: { prepaid: true, cod: false },
+  };
+  const response = await f.request("/shipments/drafts", "owner-a", "POST", { formData: populated });
+  assert.equal(response.status, 201);
+  assert.equal(response.body.data.draft.formData.warehouse, "TEST-HUB");
+  assert.equal(response.body.data.draft.formData.warehouseDetails, undefined);
+  assert.equal(response.body.data.draft.warehouseSnapshot.id, f.ids.idWarehouse);
+});
+
 test("owner can use a saved legacy warehouse without registrationStatus; another owner's saved warehouse is rejected", async t => {
   const f = await fixture(t);
   delete f.warehouse.registrationStatus;
