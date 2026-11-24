@@ -90,7 +90,7 @@ async function appendTrackingEvents({ Shipment, shipment, providerCode, events, 
   throw error;
 }
 
-async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, source = "SYNC", getEnvironment = () => process.env }) {
+async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, source = "SYNC", getEnvironment = () => process.env, logger = console }) {
   const code = String(row.record?.partnerCode || row.record?.carrierCode || row.draftData?.selectedPartnerQuote?.partnerCode || row.record?.providerCode || "").toUpperCase();
   if (code === "DELHIVERY" && row.record?.mockOnly === true) {
     const error = new Error("Mock-only shipments cannot use live Delhivery tracking."); error.code = "TRACKING_ADAPTER_UNAVAILABLE"; throw error;
@@ -98,10 +98,18 @@ async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now
   if (code === "DELHIVERY" && !/^\d{6,20}$/.test(row.waybill || "")) {
     const error = new Error("A genuine numeric Delhivery AWB is required for tracking."); error.code = "INVALID_TRACKING_AWB"; throw error;
   }
+  const environment = getEnvironment() || {};
+  const trackingFeatureEnabled = code === "DELHIVERY" ? isDelhiveryFeatureEnabled("TRACKING", environment) : false;
+  const delhiveryConfigurationPresent = code === "DELHIVERY" ? Boolean(readDelhiveryConfiguration(environment)) : false;
+  const diagnostic = { event: "tracking.adapter_diagnostic", shipmentId: String(row._id), resolvedCourierCode: code, hasTrackingAdapter: false, trackingFeatureEnabled, delhiveryConfigurationPresent };
+  try { logger?.info?.(JSON.stringify(diagnostic)); } catch { /* diagnostics must never affect tracking */ }
   const adapter = partnerRegistry?.get(code);
+  diagnostic.hasTrackingAdapter = Boolean(adapter && typeof adapter.track === "function");
+  if (!diagnostic.hasTrackingAdapter) {
+    try { logger?.warn?.(JSON.stringify(diagnostic)); } catch { /* diagnostics must never affect tracking */ }
+  }
   if (!adapter || typeof adapter.track !== "function") {
     if (code === "DELHIVERY") {
-      const environment = getEnvironment() || {};
       const configuration = readDelhiveryConfiguration(environment);
       const error = new Error(configuration ? "Delhivery tracking is disabled." : "Delhivery tracking configuration is missing.");
       error.code = configuration && isDelhiveryFeatureEnabled("TRACKING", environment) === false
@@ -120,7 +128,7 @@ async function synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now
   });
 }
 
-function createShipmentTrackingRouter({ Shipment, partnerRegistry, now, getEnvironment = () => process.env }) {
+function createShipmentTrackingRouter({ Shipment, partnerRegistry, now, getEnvironment = () => process.env, logger = console }) {
   const router = express.Router();
   router.use(requireSession);
 
@@ -151,7 +159,7 @@ function createShipmentTrackingRouter({ Shipment, partnerRegistry, now, getEnvir
     try {
       const row = await readQuery(Shipment.findOne({ _id: req.params.id, owner: req.user.id, state: "saved" }));
       if (!row) return res.status(404).json({ success: false, message: "Shipment not found." });
-      const updated = await synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, getEnvironment });
+      const updated = await synchronizeShipmentTracking({ Shipment, row, partnerRegistry, now, getEnvironment, logger });
       if (!updated) return res.status(409).json({ success: false, code: "TRACKING_ADAPTER_UNAVAILABLE", message: "Tracking synchronization is not configured for this courier." });
       return res.json({ success: true, data: {
         ...trackingResponse(updated.shipment),

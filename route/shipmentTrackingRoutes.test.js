@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const { createPartnerRegistry } = require("../services/courierQuotationService");
-const createTrackingRouter = require("../services/shipmentTrackingRouter").createShipmentTrackingRouter;
+const trackingModule = require("../services/shipmentTrackingRouter");
+const createTrackingRouter = trackingModule.createShipmentTrackingRouter;
 
 async function fixture(t, adapters = []) {
   const previous = process.env.JWT_SECRET; process.env.JWT_SECRET = "tracking-tests-only";
@@ -108,6 +109,28 @@ test("Delhivery tracking rejects non-numeric AWBs before any carrier call", asyn
   assert.equal(result.status, 400);
   assert.equal(result.body.code, "INVALID_TRACKING_AWB");
   assert.equal(calls, 0);
+});
+
+test("tracking adapter diagnostics contain only safe capability metadata", async () => {
+  const records = [];
+  const logger = { info: value => records.push(JSON.parse(value)), warn: value => records.push(JSON.parse(value)) };
+  const environment = {
+    APP_DEPLOYMENT_MODE: "production",
+    DELHIVERY_BASE_URL: "https://carrier.example.test",
+    DELHIVERY_API_TOKEN: "do-not-log-this-token",
+    DELHIVERY_TRACKING_ENABLED: "false",
+  };
+  const Shipment = { updateOne: async () => ({ modifiedCount: 0 }) };
+  const row = { _id: "shipment-safe-diagnostic", owner: "owner-a", record: { providerCode: "DELHIVERY" }, waybill: "58063010002321" };
+  const result = await trackingModule.synchronizeShipmentTracking({
+    Shipment, row, partnerRegistry: { get: () => null }, getEnvironment: () => environment, logger,
+  }).catch(error => error);
+  assert.equal(result.code, "TRACKING_FEATURE_DISABLED");
+  assert.ok(records.length >= 2);
+  for (const entry of records) {
+    assert.deepEqual(Object.keys(entry).sort(), ["delhiveryConfigurationPresent", "event", "hasTrackingAdapter", "resolvedCourierCode", "shipmentId", "trackingFeatureEnabled"].sort());
+    assert.equal(JSON.stringify(entry).includes("do-not-log-this-token"), false);
+  }
 });
 
 test("tracking sync classifies invalid responses with a safe code", async t => {
