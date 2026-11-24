@@ -51,15 +51,21 @@ const READ_ONLY_FEATURES = new Set([
   "EXPECTED_TAT", "PICKUP_STATUS", "TRACKING", "LABELS", "DOCUMENTS", "NDR_STATUS",
 ]);
 
+// Capabilities that do not have a verified provider contract must remain
+// explicitly enabled; all other capabilities can use production defaults when
+// the validated Delhivery configuration is present. An explicit "false" always
+// remains a safety override.
+const DEFAULT_DISABLED_FEATURES = new Set(["PICKUP_STATUS"]);
+
 function isDelhiveryFeatureEnabled(feature, environment = process.env) {
   const envName = DELHIVERY_FEATURES[feature];
-  if (feature === "PINCODE_SERVICEABILITY" && environment?.[envName] === undefined) {
-    return Boolean(environment && readDelhiveryConfiguration(environment));
+  if (!envName) return false;
+  if (environment?.[envName] === "false") return false;
+  const configured = Boolean(environment && readDelhiveryConfiguration(environment));
+  if (environment?.[envName] !== "true") {
+    if (environment?.APP_DEPLOYMENT_MODE !== "production" || !configured || DEFAULT_DISABLED_FEATURES.has(feature)) return false;
+    if (feature === "TRACKING_WEBHOOK" && !environment.DELHIVERY_WEBHOOK_AUTHORIZATION) return false;
   }
-  if (feature === "SHIPPING_COST" && environment?.[envName] === undefined) {
-    return Boolean(environment && readDelhiveryConfiguration(environment));
-  }
-  if (!envName || environment?.[envName] !== "true") return false;
   if (READ_ONLY_FEATURES.has(feature) || feature === "TRACKING_WEBHOOK") return true;
   return environment.APP_DEPLOYMENT_MODE !== "uat" && environment.MOCK_COURIER_ADAPTER_ENABLED !== "true";
 }

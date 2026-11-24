@@ -3,21 +3,18 @@ const assert = require("node:assert/strict");
 const { DELHIVERY_FEATURES, isDelhiveryFeatureEnabled, anyDelhiveryFeatureEnabled } = require("./delhiveryFeatureFlags");
 const { readDeploymentConfiguration } = require("./deploymentConfiguration");
 
-test("every Delhivery operation has an independent, exact-true opt-in and defaults off", () => {
+test("production credentials enable supported operations by default and explicit false disables them", () => {
   const env = {};
   for (const feature of Object.keys(DELHIVERY_FEATURES)) {
-    assert.equal(isDelhiveryFeatureEnabled(feature, env), false, `${feature} defaults off`);
-    env[DELHIVERY_FEATURES[feature]] = "true";
-    assert.equal(isDelhiveryFeatureEnabled(feature, env), true, `${feature} enables independently`);
-    for (const other of Object.keys(DELHIVERY_FEATURES)) {
-      if (other !== feature) assert.equal(isDelhiveryFeatureEnabled(other, { [DELHIVERY_FEATURES[feature]]: "true" }), false, `${feature} does not enable ${other}`);
-    }
-    env[DELHIVERY_FEATURES[feature]] = "TRUE";
-    assert.equal(isDelhiveryFeatureEnabled(feature, env), false, `${feature} requires exact true`);
-    env[DELHIVERY_FEATURES[feature]] = "true";
+    assert.equal(isDelhiveryFeatureEnabled(feature, env), false, `${feature} is off without production configuration`);
   }
   assert.equal(anyDelhiveryFeatureEnabled({}), false);
-  assert.equal(anyDelhiveryFeatureEnabled(env), true);
+  const production = { APP_DEPLOYMENT_MODE: "production", DELHIVERY_BASE_URL: "https://carrier.example.test", DELHIVERY_API_TOKEN: "test-token", MOCK_COURIER_ADAPTER_ENABLED: "false", DELHIVERY_WEBHOOK_AUTHORIZATION: "test-webhook" };
+  for (const feature of Object.keys(DELHIVERY_FEATURES)) {
+    assert.equal(isDelhiveryFeatureEnabled(feature, production), feature === "PICKUP_STATUS" ? false : true, feature);
+    assert.equal(isDelhiveryFeatureEnabled(feature, { ...production, [DELHIVERY_FEATURES[feature]]: "false" }), false, `${feature} explicit false`);
+  }
+  assert.equal(anyDelhiveryFeatureEnabled(production), true);
 });
 
 test("UAT and mock mode preserve individually enabled reads and block outbound carrier mutations", () => {
@@ -38,9 +35,9 @@ test("UAT and mock mode preserve individually enabled reads and block outbound c
   }
 });
 
-test("configured credentials supply automatic defaults only for standard pincode and shipping-cost reads", () => {
+test("configured production credentials supply defaults while UAT remains opt-in", () => {
   const env = {
-    MOCK_COURIER_ADAPTER_ENABLED: "true", COURIER_DELHIVERY_ADAPTER_ENABLED: "false",
+    APP_DEPLOYMENT_MODE: "production", MOCK_COURIER_ADAPTER_ENABLED: "false", COURIER_DELHIVERY_ADAPTER_ENABLED: "false",
     DELHIVERY_API_TOKEN: "test-token", DELHIVERY_BASE_URL: "https://carrier.example.test",
   };
   assert.equal(isDelhiveryFeatureEnabled("PINCODE_SERVICEABILITY", env), true);
@@ -51,9 +48,8 @@ test("configured credentials supply automatic defaults only for standard pincode
   assert.equal(isDelhiveryFeatureEnabled("PINCODE_SERVICEABILITY", { ...env, DELHIVERY_BASE_URL: "http://carrier.example.test" }), false);
   assert.equal(isDelhiveryFeatureEnabled("SHIPPING_COST", { ...env, DELHIVERY_API_TOKEN: "" }), false);
   assert.equal(isDelhiveryFeatureEnabled("SHIPPING_COST", { ...env, DELHIVERY_BASE_URL: "http://carrier.example.test" }), false);
-  for (const feature of Object.keys(DELHIVERY_FEATURES).filter(name => !["PINCODE_SERVICEABILITY", "SHIPPING_COST"].includes(name))) {
-    assert.equal(isDelhiveryFeatureEnabled(feature, env), false, feature);
-  }
+  assert.equal(isDelhiveryFeatureEnabled("SHIPMENT_BOOKING", env), true);
+  assert.equal(isDelhiveryFeatureEnabled("SHIPMENT_BOOKING", { ...env, APP_DEPLOYMENT_MODE: "uat" }), false);
 });
 
 test("hosted deployment validates database isolation before connecting and rejects invalid origins", () => {

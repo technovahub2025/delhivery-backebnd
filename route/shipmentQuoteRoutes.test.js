@@ -181,7 +181,8 @@ test("unconfigured adapters return explicit configuration status without persist
 
 test("live comparison uses the configured Delhivery cost API for Surface and Express while mock booking stays isolated", async t => {
   const environment = {
-    NODE_ENV: "test", MOCK_COURIER_ADAPTER_ENABLED: "true",
+    NODE_ENV: "test", APP_DEPLOYMENT_MODE: "uat", MOCK_COURIER_ADAPTER_ENABLED: "true",
+    DELHIVERY_SHIPPING_COST_ENABLED: "true",
     DELHIVERY_BASE_URL: "https://carrier.example.test", DELHIVERY_API_TOKEN: "test-token",
   };
   const calls = [];
@@ -220,7 +221,7 @@ test("live comparison uses the configured Delhivery cost API for Surface and Exp
 });
 
 test("live Delhivery quotation errors are reported per mode without sample fallback", async t => {
-  const environment = { DELHIVERY_BASE_URL: "https://carrier.example.test", DELHIVERY_API_TOKEN: "test-token" };
+  const environment = { APP_DEPLOYMENT_MODE: "uat", DELHIVERY_SHIPPING_COST_ENABLED: "true", DELHIVERY_BASE_URL: "https://carrier.example.test", DELHIVERY_API_TOKEN: "test-token" };
   const calls = [];
   const carrier = {
     get: async (path, options) => {

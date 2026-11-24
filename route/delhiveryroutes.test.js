@@ -521,9 +521,10 @@ test("provider errors do not expose provider message or response body", async t 
 test("configured pincode lookup uses Delhivery with mock booking and an unset read flag, without falling back on errors", async t => {
   const f = await fixture(t);
   const env = {
+    APP_DEPLOYMENT_MODE: "uat",
     MOCK_COURIER_ADAPTER_ENABLED: "true",
     COURIER_DELHIVERY_ADAPTER_ENABLED: "false",
-    DELHIVERY_PINCODE_SERVICEABILITY_ENABLED: undefined,
+    DELHIVERY_PINCODE_SERVICEABILITY_ENABLED: "true",
     DELHIVERY_API_TOKEN: "route-test-token",
     DELHIVERY_BASE_URL: "https://delhivery.example.test",
   };

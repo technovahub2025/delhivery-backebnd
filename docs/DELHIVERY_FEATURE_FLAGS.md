@@ -1,6 +1,6 @@
 # Delhivery feature gates
 
-Delhivery capabilities have individual controls. Standard pincode lookup and shipping-cost estimates default on when their flag is unset and the HTTPS service URL and token are configured. Set either flag to `false` to disable that read. Other capabilities require an exact `true`. The legacy `COURIER_DELHIVERY_ADAPTER_ENABLED` variable does not control these operations.
+In production, capabilities default on when the validated HTTPS service URL and token are configured. Set an individual capability to `false` as a safety override when it must remain disabled. UAT/test environments remain explicit opt-in and preserve mock-mode mutation protections. Pickup status remains opt-in because no verified provider status contract is implemented. The legacy `COURIER_DELHIVERY_ADAPTER_ENABLED` variable does not control these operations.
 
 | Feature | Environment variable | Route/adapter operation |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ Delhivery capabilities have individual controls. Standard pincode lookup and shi
 | NDR status | `DELHIVERY_NDR_STATUS_ENABLED` | Owner-scoped upload status lookup |
 | Scan Push | `DELHIVERY_TRACKING_WEBHOOK_ENABLED` | Inbound tracking callback, also requires configured sender authentication |
 
-With `MOCK_COURIER_ADAPTER_ENABLED=true`, the booking registry exposes only `MOCK_LOCAL` when connected to `courier_testing` in development, test, or explicit hosted UAT. Invalid mock prerequisites expose no booking adapter. Each carrier read uses its own capability. `DELHIVERY_READS_IN_MOCK_MODE_ENABLED` is no longer required. The standard PIN tools call the live endpoint with configured credentials unless explicitly disabled. The booking comparison uses the live cost capability by default. Sample comparisons and sample PIN lookups require an explicit `source=sample` request and isolated mock mode. A live estimate in UAT remains estimate-only.
+With `MOCK_COURIER_ADAPTER_ENABLED=true`, the booking registry exposes only `MOCK_LOCAL` when connected to `courier_testing` in development, test, or explicit hosted UAT. Invalid mock prerequisites expose no booking adapter. Each carrier read uses its own capability. `DELHIVERY_READS_IN_MOCK_MODE_ENABLED` is no longer required. The standard PIN tools call the live endpoint with configured credentials unless explicitly disabled. In UAT/test, the corresponding capability must be explicitly enabled; in production it defaults on when provider configuration is valid. Sample comparisons and sample PIN lookups require an explicit `source=sample` request and isolated mock mode. A live estimate in UAT remains estimate-only.
 
 Hosted UAT blocks outbound carrier mutations even if their operation flags are set. Scan Push is a separately authenticated inbound operation and can be enabled for hosted UAT using the UAT callback and its dedicated authorization. Live booking also requires pincode serviceability verification. A Delhivery draft quote without a provider expiry must pass a fresh rate check before submission.
 
